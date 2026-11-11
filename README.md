@@ -4,7 +4,9 @@ How much accuracy do incremental-capacity (IC) features add over a simple stream
 ΔQ estimator for battery state of health, and does the gain survive noisy, sparse
 voltage logs like a real BMS produces?
 
-Work in progress. Current state: data loader with audit, a time-based ΔQ feature on
+Work in progress. Current state: data loader with audit, a streaming-style window
+detector (arming band, first crossing, sample-gap check) with every "no estimate"
+counted by reason, a time-based ΔQ feature on
 one fixed voltage window, and mean / linear models under leave-one-cell-out
 validation. The numbers in `results/` are preliminary until nested window
 selection is in place.

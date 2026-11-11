@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
 
-from soh.features import crossing_time, window_dq
+from soh.features import ARM_BAND_V, MAX_GAP_S, Reason, crossing_time, detect_window
+
+V1, V2 = 3.6, 4.0
+I_MA = 740.0
 
 
 def linear_trace(v_start=3.0, v_end=4.2, rate_v_per_s=0.001, dt=1.0):
@@ -9,58 +12,157 @@ def linear_trace(v_start=3.0, v_end=4.2, rate_v_per_s=0.001, dt=1.0):
     return t, v_start + rate_v_per_s * t
 
 
+def mah(seconds, current_ma=I_MA):
+    return current_ma * seconds / 3600.0
+
+
+# --- crossing primitive ---------------------------------------------------------
+
+
 def test_crossing_interpolates_between_samples():
-    t = np.array([0.0, 10.0, 20.0])
-    v = np.array([3.50, 3.60, 3.70])
-    tc, k = crossing_time(t, v, 3.65)
-    assert k == 2
-    assert tc == pytest.approx(15.0)
+    tc, k = crossing_time(np.array([0.0, 10.0, 20.0]), np.array([3.50, 3.60, 3.70]), 3.65)
+    assert (tc, k) == (pytest.approx(15.0), 2)
 
 
 def test_crossing_on_exact_sample():
-    t = np.array([0.0, 10.0, 20.0])
-    v = np.array([3.50, 3.60, 3.70])
-    tc, k = crossing_time(t, v, 3.60)
+    tc, k = crossing_time(np.array([0.0, 10.0, 20.0]), np.array([3.50, 3.60, 3.70]), 3.60)
     assert (tc, k) == (pytest.approx(10.0), 1)
 
 
 def test_no_crossing_returns_nan():
-    t = np.array([0.0, 1.0, 2.0])
-    v = np.array([3.5, 3.6, 3.7])
-    tc, k = crossing_time(t, v, 3.9)
+    tc, k = crossing_time(np.array([0.0, 1.0, 2.0]), np.array([3.5, 3.6, 3.7]), 3.9)
     assert np.isnan(tc) and k == -1
 
 
-def test_dq_linear_trace_exact():
-    # 1 mV/s: 400 mV window lasts 400 s; 740 mA * 400 s = 82.222 mAh
-    t, v = linear_trace()
-    dq, dur = window_dq(t, v, 3.6, 4.0)
-    assert dur == pytest.approx(400.0)
-    assert dq == pytest.approx(740.0 * 400.0 / 3600.0)
+# --- clean traces -----------------------------------------------------------------
 
 
-def test_dq_piecewise_trace():
-    # Fast below 3.7 V (2 mV/s), slow above (0.5 mV/s): 50 s + 600 s
+def test_linear_trace_exact():
+    w = detect_window(*linear_trace(), V1, V2)  # 1 mV/s -> 400 s
+    assert w.reason is Reason.OK
+    assert w.duration_s == pytest.approx(400.0)
+    assert w.dq == pytest.approx(mah(400.0))
+
+
+def test_piecewise_trace():
+    # 2 mV/s below 3.7 V, 0.5 mV/s above: 50 s + 600 s
     t = np.arange(0.0, 2000.0, 1.0)
     v = np.where(t <= 350, 3.0 + 0.002 * t, 3.7 + 0.0005 * (t - 350))
-    dq, dur = window_dq(t, v, 3.6, 4.0)
-    assert dur == pytest.approx(50.0 + 600.0)
-    assert dq == pytest.approx(740.0 * 650.0 / 3600.0)
+    w = detect_window(t, v, V1, V2)
+    assert w.duration_s == pytest.approx(650.0)
+    assert w.dq == pytest.approx(mah(650.0))
 
 
-def test_dq_uses_given_current():
+def test_uses_given_current():
+    w = detect_window(*linear_trace(), V1, V2, current_ma=370.0)
+    assert w.dq == pytest.approx(mah(400.0, 370.0))
+
+
+def test_independent_of_sample_period_on_linear_trace():
+    a = detect_window(*linear_trace(dt=1.0), V1, V2)
+    b = detect_window(*linear_trace(dt=7.0), V1, V2)
+    assert a.dq == pytest.approx(b.dq, rel=1e-9)
+
+
+def test_single_sample_jumps_over_both_levels():
+    t = np.array([0.0, 10.0, 20.0])
+    v = np.array([3.0, 3.5, 4.5])  # 3.6 at t=11, 4.0 at t=15
+    w = detect_window(t, v, V1, V2)
+    assert w.reason is Reason.OK
+    assert (w.t1, w.t2) == (pytest.approx(11.0), pytest.approx(15.0))
+
+
+# --- edge rule: arming / hysteresis -------------------------------------------------
+
+
+def test_not_armed_when_trace_starts_at_v1():
+    assert detect_window(*linear_trace(v_start=V1), V1, V2).reason is Reason.NOT_ARMED
+
+
+def test_not_armed_inside_band():
+    t, v = linear_trace(v_start=V1 - 0.5 * ARM_BAND_V)
+    assert detect_window(t, v, V1, V2).reason is Reason.NOT_ARMED
+
+
+def test_armed_just_below_band():
+    t, v = linear_trace(v_start=V1 - ARM_BAND_V - 0.001)
+    assert detect_window(t, v, V1, V2).reason is Reason.OK
+
+
+def test_arms_on_later_dip():
+    # Starts inside the band, dips below it (e.g. relaxation), then charges.
+    t = np.arange(0.0, 600.0, 1.0)
+    v = np.concatenate([np.full(50, 3.595), np.full(50, 3.585), 3.585 + 0.001 * np.arange(1, 501)])
+    w = detect_window(t, v, V1, V2)
+    assert w.reason is Reason.OK
+    assert w.t1 == pytest.approx(100 + 14, abs=1e-6)  # 3.585 + 0.015
+
+
+def test_noisy_crossing_uses_first_crossing_only():
+    # Crosses V1 at t=2, dips back below at t=3, re-crosses at t=4: window starts at the first.
+    t = np.arange(0.0, 9.0, 1.0)
+    v = np.array([3.58, 3.59, 3.61, 3.599, 3.62, 3.8, 3.95, 4.05, 4.1])
+    w = detect_window(t, v, V1, V2)
+    assert w.t1 == pytest.approx(1.5)
+    assert w.k1 == 2
+
+
+def test_repeated_voltage_samples_at_level():
+    t = np.arange(0.0, 10.0, 1.0)
+    v = np.array([3.58, 3.59, 3.60, 3.60, 3.60, 3.70, 3.80, 3.90, 4.00, 4.10])
+    w = detect_window(t, v, V1, V2)
+    assert (w.t1, w.t2) == (pytest.approx(2.0), pytest.approx(8.0))
+
+
+def test_v2_dip_before_crossing_is_ignored():
+    # Voltage plateaus just below V2 with repeated values; first V2 crossing is used.
+    t = np.arange(0.0, 8.0, 1.0)
+    v = np.array([3.5, 3.7, 3.9, 3.999, 3.999, 3.998, 4.0, 4.1])
+    assert detect_window(t, v, V1, V2).t2 == pytest.approx(6.0)
+
+
+# --- edge rule: window never completes ----------------------------------------------
+
+
+def test_no_v2_when_charge_stops_inside_window():
+    assert detect_window(*linear_trace(v_end=3.95), V1, V2).reason is Reason.NO_V2
+
+
+def test_no_v2_when_v1_never_reached():
+    assert detect_window(*linear_trace(v_end=3.55), V1, V2).reason is Reason.NO_V2
+
+
+def test_no_estimate_carries_nan_features():
+    w = detect_window(*linear_trace(v_end=3.95), V1, V2)
+    assert np.isnan(w.dq) and np.isnan(w.duration_s) and not w.ok
+
+
+# --- edge rule: sample gap -------------------------------------------------------------
+
+
+def gapped_trace(gap_start_s, gap_s):
     t, v = linear_trace()
-    dq, _ = window_dq(t, v, 3.6, 4.0, current_ma=370.0)
-    assert dq == pytest.approx(370.0 * 400.0 / 3600.0)
+    keep = (t <= gap_start_s) | (t >= gap_start_s + gap_s)
+    return t[keep], v[keep]
 
 
-def test_dq_independent_of_sample_period():
-    a = window_dq(*linear_trace(dt=1.0), 3.6, 4.0)
-    b = window_dq(*linear_trace(dt=7.0), 3.6, 4.0)
-    assert a[0] == pytest.approx(b[0], rel=1e-9)
+def test_gap_inside_window():
+    # V1 at t=600, V2 at t=1000
+    assert detect_window(*gapped_trace(700, MAX_GAP_S + 1), V1, V2).reason is Reason.GAP
 
 
-def test_window_never_completes():
-    t, v = linear_trace(v_end=3.95)
-    dq, dur = window_dq(t, v, 3.6, 4.0)
-    assert np.isnan(dq) and np.isnan(dur)
+def test_gap_at_limit_is_allowed():
+    assert detect_window(*gapped_trace(700, MAX_GAP_S), V1, V2).reason is Reason.OK
+
+
+def test_gap_across_v1_crossing():
+    assert detect_window(*gapped_trace(550, MAX_GAP_S + 1), V1, V2).reason is Reason.GAP
+
+
+def test_gap_across_v2_crossing():
+    assert detect_window(*gapped_trace(950, MAX_GAP_S + 1), V1, V2).reason is Reason.GAP
+
+
+def test_gap_outside_window_is_ignored():
+    assert detect_window(*gapped_trace(100, 300), V1, V2).reason is Reason.OK
+    assert detect_window(*gapped_trace(1010, 300), V1, V2).reason is Reason.OK
