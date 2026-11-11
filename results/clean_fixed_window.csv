@@ -1,3 +1,0 @@
-model,rmse,macro_rmse,mae,max_abs,n,n_total,answer_rate,n_NOT_ARMED,n_NO_V2,n_GAP,median_window_s
-M0,6.7708,6.7069,5.7380,24.3734,519,519,1.0000,0,0,0,2009.8059
-M1,1.3639,1.3653,1.1531,3.5778,519,519,1.0000,0,0,0,2009.8059

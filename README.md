@@ -6,10 +6,10 @@ voltage logs like a real BMS produces?
 
 Work in progress. Current state: data loader with audit, a streaming-style window
 detector (arming band, first crossing, sample-gap check) with every "no estimate"
-counted by reason, a time-based ΔQ feature on
-one fixed voltage window, and mean / linear models under leave-one-cell-out
-validation. The numbers in `results/` are preliminary until nested window
-selection is in place.
+counted by reason, a time-based ΔQ feature, and mean / linear models under nested
+leave-one-cell-out validation: each model picks its voltage window inside each
+outer fold using only the 7 training cells. Tables are in `results/clean_nested.md`
+(pooled), `results/clean_nested_per_cell.md` and `results/window_log.md`.
 
 ## Data
 
