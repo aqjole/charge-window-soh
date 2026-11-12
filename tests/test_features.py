@@ -166,3 +166,65 @@ def test_gap_across_v2_crossing():
 def test_gap_outside_window_is_ignored():
     assert detect_window(*gapped_trace(100, 300), V1, V2).reason is Reason.OK
     assert detect_window(*gapped_trace(1010, 300), V1, V2).reason is Reason.OK
+
+
+# --- IC features -------------------------------------------------------------------------
+
+from soh.features import IC_BIN_V, ic_features  # noqa: E402
+
+
+def ic_trace(v_peak=3.9, width_v=0.02, q_step=200.0, slope=300.0, v_start=3.5, v_end=4.2, dv=0.0005):
+    """Trace with q(V) = slope*(V - v_start) + q_step * logistic((V - v_peak)/width): known IC peak."""
+    v = np.arange(v_start, v_end, dv)
+    q = slope * (v - v_start) + q_step / (1 + np.exp(-(v - v_peak) / width_v))
+    t = q * 3600 / I_MA
+    peak_h = slope + q_step / (4 * width_v)
+    return t, v, peak_h
+
+
+def ic_of(t, v, v1, v2):
+    return ic_features(t, v, detect_window(t, v, v1, v2), v1, v2)
+
+
+def test_ic_finds_known_peak():
+    t, v, peak_h = ic_trace()
+    ic = ic_of(t, v, 3.8, 4.0)
+    assert ic.reason is Reason.OK
+    assert abs(ic.peak_v - 3.9) <= IC_BIN_V
+    assert ic.peak_h == pytest.approx(peak_h, rel=0.05)
+
+
+def test_ic_peak_moves_with_true_peak():
+    t, v, _ = ic_trace(v_peak=3.85)
+    assert abs(ic_of(t, v, 3.7, 4.0).peak_v - 3.85) <= IC_BIN_V
+
+
+def test_ic_edge_when_peak_outside_window():
+    t, v, _ = ic_trace(v_peak=4.05)  # dQ/dV still rising at V2
+    assert ic_of(t, v, 3.7, 3.9).reason is Reason.IC_EDGE
+
+
+def test_ic_edge_when_peak_below_window():
+    t, v, _ = ic_trace(v_peak=3.65)  # dQ/dV falling from V1
+    assert ic_of(t, v, 3.8, 4.0).reason is Reason.IC_EDGE
+
+
+def test_ic_sparse_with_few_samples():
+    t, v, _ = ic_trace()
+    keep = np.arange(0, len(t), 40)  # one sample per 20 mV -> 75 % of 5 mV bins empty
+    t, v = t[keep], v[keep]
+    w = detect_window(t, v, 3.8, 4.0, max_gap_s=np.inf)  # isolate the sparse-bin rule from GAP
+    assert ic_features(t, v, w, 3.8, 4.0).reason is Reason.IC_SPARSE
+
+
+def test_ic_tolerates_some_empty_bins():
+    t, v, _ = ic_trace()
+    keep = np.arange(0, len(t), 16)  # one sample per 8 mV -> under half the bins empty
+    ic = ic_of(t[keep], v[keep], 3.8, 4.0)
+    assert ic.reason is Reason.OK
+    assert abs(ic.peak_v - 3.9) <= 2 * IC_BIN_V
+
+
+def test_ic_inherits_window_reason():
+    t, v, _ = ic_trace(v_end=3.95)
+    assert ic_of(t, v, 3.8, 4.0).reason is Reason.NO_V2

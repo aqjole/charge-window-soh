@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from soh.models import Spec
 from soh.validate import loco as outer_loco, metrics
 
 
@@ -36,7 +37,7 @@ def test_held_out_cell_never_in_training(monkeypatch):
         def predict(self, X):
             return np.zeros(len(X))
 
-    monkeypatch.setitem(validate.MODELS, "SPY", (("dq",), Spy))
+    monkeypatch.setitem(validate.MODELS, "SPY", Spec(("dq",), Spy))
     pred = outer_loco(df, "SPY")
     assert seen == [70] * 8
     assert len(pred) == 80
@@ -131,7 +132,7 @@ def test_width_regime_restricts_grid():
 def test_nested_finds_the_informative_window():
     good, bad = Win(3.6, 3.8), Win(3.5, 3.6)
     feats = multi_window_features({good: 0.05, bad: 5.0})
-    _, _, log, _ = nested(feats, "M1", regimes=("any",))
+    _, _, log, _, _ = nested(feats, "M1", regimes=("any",))
     assert (log[0][["v1", "v2"]].to_numpy() == [good.v1, good.v2]).all()
 
 
@@ -146,3 +147,65 @@ def test_held_out_cell_never_influences_its_fold_selection():
     pd.testing.assert_series_equal(base[base.fold == 3].v1, after[after.fold == 3].v1)
     pd.testing.assert_series_equal(base[base.fold == 3].v2, after[after.fold == 3].v2)
     assert (after[after.fold != 3].v1 == bad.v1).all()  # sanity: other folds did see the damage
+
+
+# --- IC model: no fallback, paired comparison ---------------------------------------
+
+from soh.validate import paired, sign_test_p  # noqa: E402
+
+
+def with_ic(df, rng_seed=0):
+    rng = np.random.default_rng(rng_seed)
+    df = df.copy()
+    df["ic_reason"] = "OK"
+    df["ic_peak_h"] = rng.normal(3000, 10, len(df))
+    df["ic_peak_v"] = rng.normal(3.9, 0.01, len(df))
+    return df
+
+
+def test_m2_gives_no_estimate_without_ic_and_counts_reason():
+    df = with_ic(synthetic_table())
+    df.loc[[0, 1], "ic_reason"] = ["IC_EDGE", "IC_SPARSE"]
+    df.loc[[0, 1], ["ic_peak_h", "ic_peak_v"]] = np.nan
+    m2 = outer_loco(df, "M2")
+    m1 = outer_loco(df, "M1")
+    assert m2.loc[m2.cycle.isin([0, 100]) & (m2.cell == 1), "pred"].isna().all()
+    assert m1.pred.notna().all()  # M1 is unaffected by IC reasons
+    m = metrics(m2)
+    assert (m["n_IC_EDGE"], m["n_IC_SPARSE"], m["n"]) == (1, 1, 78)
+
+
+def test_m2_window_reason_takes_precedence():
+    df = with_ic(synthetic_table())
+    df.loc[0, ["reason", "ic_reason"]] = ["GAP", "GAP"]
+    df.loc[0, ["dq", "ic_peak_h", "ic_peak_v"]] = np.nan
+    assert metrics(outer_loco(df, "M2"))["n_GAP"] == 1
+
+
+def test_sign_test_p_values():
+    assert sign_test_p(7, 8) == pytest.approx(9 / 256)
+    assert sign_test_p(8, 8) == pytest.approx(1 / 256)
+    assert sign_test_p(0, 8) == 1.0
+
+
+def test_paired_uses_only_common_traces_and_applies_rule():
+    base = synthetic_table().assign(pred=lambda d: d.capacity + 7.0)  # 1 point-ish error
+    ic = base.assign(pred=lambda d: d.capacity + 3.5)
+    ic.loc[ic.cell == 8, "pred"] = ic.loc[ic.cell == 8, "capacity"] + 20.0  # worse on one cell
+    ic.loc[0, "pred"] = np.nan  # unanswered by IC model -> excluded from both
+    summ, per_cell = paired(ic, base)
+    assert summ["n_common"] == 79
+    assert summ["cells_ic_better"] == 7
+    assert summ["verdict"] == "IC helps"
+    ic.loc[ic.cell == 7, "pred"] = ic.loc[ic.cell == 7, "capacity"] + 20.0
+    assert paired(ic, base)[0]["verdict"] == "no detectable gain"
+
+
+def test_window_with_no_answered_training_traces():
+    df = with_ic(synthetic_table())
+    df.loc[df.cell != 1, "ic_reason"] = "IC_EDGE"
+    pred = outer_loco(df, "M2")
+    m = metrics(pred)
+    assert m["n"] == 0
+    assert m["n_NO_TRAIN"] == 10  # cell 1 has IC but nothing to train on
+    assert m["n_IC_EDGE"] == 70

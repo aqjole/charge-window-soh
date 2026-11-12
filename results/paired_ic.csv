@@ -1,0 +1,6 @@
+ic_model,base_model,regime,n_common,rmse_base,rmse_ic,macro_rmse_base,macro_rmse_ic,cells_ic_better,n_cells,sign_test_p,verdict
+M2,M1,any,519.0000,0.6740,0.5058,0.6797,0.4622,8.0000,8.0000,0.0039,IC helps
+M2,M1,w100,,,,,,,,,n/a (no eligible window)
+M2,M1,w200,519.0000,0.5758,0.6771,0.5788,0.6179,5.0000,8.0000,0.3633,no detectable gain
+M2,M1,w300,519.0000,0.5846,0.6039,0.5820,0.5453,6.0000,8.0000,0.1445,no detectable gain
+M2,M1,w400,519.0000,0.5894,0.5058,0.5784,0.4622,8.0000,8.0000,0.0039,IC helps
