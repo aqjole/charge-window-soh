@@ -96,31 +96,42 @@ def feature_table(curves: list[Curve], win: Win) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def fit_predict(df: pd.DataFrame, model: str, test_cells, train_cells) -> pd.DataFrame:
-    """Fit `model` on the answered rows of `train_cells`, predict the rows of `test_cells`.
+def model_reason(df: pd.DataFrame, model: str) -> pd.Series:
+    """The model's own reason per row: IC models need the IC reason too (no fallback)."""
+    return df.ic_reason if MODELS[model].needs_ic else df.reason
 
-    Returns the test rows with `pred` and `std` in mAh (NaN where there is no estimate,
-    `std` NaN for models without one) and `reason` set to the model's own reason: for
-    IC models a missing IC peak is a no-estimate, with no fallback.
-    """
-    spec = MODELS[model]
-    reason = df.ic_reason if spec.needs_ic else df.reason
-    answered = reason == Reason.OK.value
-    train = df[df.cell.isin(train_cells) & answered]
-    test = df[df.cell.isin(test_cells)].assign(reason=reason, pred=np.nan, std=np.nan)
-    cols = list(spec.cols)
-    X = lambda d: d[cols].to_numpy() if cols else np.zeros((len(d), 1))  # noqa: E731
-    ok = test.reason == Reason.OK.value
+
+def _X(d: pd.DataFrame, model: str) -> np.ndarray:
+    cols = list(MODELS[model].cols)
+    return d[cols].to_numpy() if cols else np.zeros((len(d), 1))
+
+
+def fit_model(df: pd.DataFrame, model: str, train_cells):
+    """Fit on the answered rows of `train_cells`; None if there are none."""
+    train = df[df.cell.isin(train_cells) & (model_reason(df, model) == Reason.OK.value)]
     if train.empty:
+        return None
+    return MODELS[model].factory().fit(_X(train, model), train.capacity.to_numpy())
+
+
+def predict_rows(est, test: pd.DataFrame, model: str) -> pd.DataFrame:
+    """`test` rows with `pred`, `std` [mAh] and the model's `reason`; NaN where no estimate."""
+    test = test.assign(reason=model_reason(test, model), pred=np.nan, std=np.nan)
+    ok = test.reason == Reason.OK.value
+    if est is None:
         test.loc[ok, "reason"] = Reason.NO_TRAIN.value
     elif ok.any():
-        m = spec.factory().fit(X(train), train.capacity.to_numpy())
-        if spec.has_std:
-            mu, sd = m.predict(X(test[ok]), return_std=True)
+        if MODELS[model].has_std:
+            mu, sd = est.predict(_X(test[ok], model), return_std=True)
             test.loc[ok, "pred"], test.loc[ok, "std"] = mu, sd
         else:
-            test.loc[ok, "pred"] = m.predict(X(test[ok]))
+            test.loc[ok, "pred"] = est.predict(_X(test[ok], model))
     return test
+
+
+def fit_predict(df: pd.DataFrame, model: str, test_cells, train_cells) -> pd.DataFrame:
+    """Fit `model` on the answered rows of `train_cells`, predict the rows of `test_cells`."""
+    return predict_rows(fit_model(df, model, train_cells), df[df.cell.isin(test_cells)], model)
 
 
 def loco(df: pd.DataFrame, model: str, cells: list[int] | None = None) -> pd.DataFrame:
@@ -300,12 +311,17 @@ def sign_test_p(k: int, n: int) -> float:
     return sum(comb(n, j) for j in range(k, n + 1)) / 2**n
 
 
-def paired(pred_ic: pd.DataFrame, pred_base: pd.DataFrame) -> tuple[dict, pd.DataFrame]:
-    """Compare two models on the traces both answered (each at its own selected window)."""
-    key = ["cell", "cycle"]
+def paired(pred_ic: pd.DataFrame, pred_base: pd.DataFrame, key=("cell", "cycle")) -> tuple[dict, pd.DataFrame]:
+    """Compare two models on the traces both answered (each at its own selected window).
+
+    `key` identifies a trace; it must include `cell` (the decision rule counts cells).
+    """
+    key = list(key)
     a = pred_ic[key + ["pred", "capacity", "c0"]].rename(columns={"pred": "pred_ic"})
     b = pred_base[key + ["pred"]].rename(columns={"pred": "pred_base"})
     m = a.merge(b, on=key).dropna(subset=["pred_ic", "pred_base"])
+    if m.empty:
+        return dict(n_common=0, verdict="n/a (no commonly answered traces)"), pd.DataFrame()
     for side in ("ic", "base"):
         m[f"err_{side}"] = 100.0 * (m[f"pred_{side}"] - m.capacity) / m.c0
     rmse = lambda e: float(np.sqrt(np.mean(e**2)))  # noqa: E731

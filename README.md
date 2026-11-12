@@ -28,8 +28,25 @@ Known limitation of the GPR intervals: pooled 95 % coverage on held-out cells is
 and 7, whose error drifts with age: the intervals reflect noise within the training
 cells, not the spread between cells.
 
-`make reproduce` takes 10-15 minutes on an 8-core laptop; nearly all of it is
-about 950 GPR fits, run in parallel.
+Degraded-log tests (`results/degraded.md`, `results/degraded_paired_ic.md`,
+`results/degraded.png`): each outer fold's frozen model is applied to copies of its
+held-out cell with voltage noise, offset, ADC quantization or a longer sample period.
+Main findings so far:
+
+- Noise pulls the first-crossing times early by roughly sigma / (dV/dt). Window
+  edges on the flat part of the charge curve (3.8-3.9 V) suffer most, so ΔQ models
+  whose window starts there lose accuracy fastest (M1: 0.67 -> 1.15 SOH points at
+  2 mV). The IC models select 3.6-4.0 V, whose edges sit on steeper parts; part of
+  their robustness to noise and offset is this window placement, not the IC peak.
+- A longer sample period does not hurt ΔQ (crossings are interpolated), but it
+  starves the IC features: at 60 s every trace is IC_SPARSE and M2/M4 give no
+  estimate.
+- A 5 mV ADC LSB hurts the GPR IC model (M4) most.
+- The GPR intervals ignore input noise: coverage drops from 87-92 % on clean data
+  to 66-75 % at 2 mV noise.
+
+`make reproduce` takes 12-30 minutes on an 8-core laptop, depending on load; nearly all of it is
+about 950 GPR fits in the validation, run in parallel.
 
 ## Data
 

@@ -114,3 +114,43 @@ def predictions(preds: dict[str, pd.DataFrame], regime: str = "any") -> None:
         "band crossing zero = measurement covered"
     )
     save_fig(fig, "predictions_gpr.png")
+
+
+def degraded(summary: pd.DataFrame, models=("M1", "M2", "M3", "M4")) -> None:
+    """Held-out RMSE at each level of each degradation sweep, one line per model.
+
+    Levels where a model answers under 100 % of traces are labelled with the answer
+    rate; levels with no answers are marked on the x axis.
+    """
+    colors = {"M1": "C0", "M2": "C1", "M3": "C2", "M4": "C3"}
+    panels = [
+        ("Voltage noise sigma [mV]", ["clean", "noise 1 mV", "noise 2 mV", "noise 5 mV", "noise 10 mV"], ["0", "1", "2", "5", "10"]),
+        ("Sample period [s]", ["period 1 s", "period 10 s", "period 30 s", "period 60 s"], ["1", "10", "30", "60"]),
+        ("Voltage offset [mV]", ["offset -5 mV", "clean", "offset +5 mV"], ["-5", "0", "+5"]),
+        ("ADC LSB [mV]", ["clean", "LSB 1 mV", "LSB 5 mV"], ["raw", "1", "5"]),
+        ("Combined:\n2 mV, 1 mV LSB, 10 s", ["clean", "combined"], ["clean", "combined"]),
+    ]
+    fig, axes = plt.subplots(1, len(panels), figsize=(16, 4.2), gridspec_kw=dict(width_ratios=[5, 4, 3, 3, 2.4]))
+    for ax, (title, cases, ticks) in zip(axes, panels):
+        x = range(len(cases))
+        for m in models:
+            g = summary[summary.model == m].set_index("case").loc[cases]
+            ax.plot(x, g.rmse, "-o", ms=4, color=colors[m], label=m)
+            for xi, (rate, rmse) in enumerate(zip(g.answer_rate, g.rmse)):
+                if rate == 0:
+                    ax.plot(xi, 0, "x", color=colors[m], ms=9, mew=2, clip_on=False)
+                    ax.annotate(f"{m}: none answered", (xi, 0), xytext=(-4, 8 + 12 * models.index(m)),
+                                textcoords="offset points", fontsize=7, color=colors[m], ha="right")
+                elif rate < 1:
+                    ax.annotate(f"{100 * rate:.0f} %", (xi, rmse), xytext=(4, 2), textcoords="offset points",
+                                fontsize=7, color=colors[m])
+        ax.set_xticks(list(x), ticks, fontsize=8)
+        ax.set_xlim(-0.4, len(cases) - 0.6)
+        ax.set_ylim(bottom=0)
+        ax.set_xlabel(title)
+        ax.grid(alpha=0.3)
+    axes[0].set_ylabel("Held-out RMSE [SOH points]")
+    axes[0].legend(fontsize=8, loc="upper left")
+    fig.suptitle("Frozen fold models (any-width windows) on degraded copies of their held-out cell; "
+                 "answer rate is 100 % unless marked")
+    save_fig(fig, "degraded.png")
