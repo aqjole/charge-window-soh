@@ -9,3 +9,8 @@ Each pair compared on the held-out traces both models answered, each model at it
 | M2         | M1           | w200     |    519.000 |       0.576 |     0.677 |             0.579 |           0.618 |             5.000 |     8.000 |         0.363 | no detectable gain       |
 | M2         | M1           | w300     |    519.000 |       0.585 |     0.604 |             0.582 |           0.545 |             6.000 |     8.000 |         0.145 | no detectable gain       |
 | M2         | M1           | w400     |    519.000 |       0.589 |     0.506 |             0.578 |           0.462 |             8.000 |     8.000 |         0.004 | IC helps                 |
+| M4         | M3           | any      |    519.000 |       0.455 |     0.306 |             0.429 |           0.298 |             6.000 |     8.000 |         0.145 | no detectable gain       |
+| M4         | M3           | w100     |    nan     |     nan     |   nan     |           nan     |         nan     |           nan     |   nan     |       nan     | n/a (no eligible window) |
+| M4         | M3           | w200     |    519.000 |       0.637 |     0.390 |             0.576 |           0.359 |             7.000 |     8.000 |         0.035 | IC helps                 |
+| M4         | M3           | w300     |    519.000 |       0.722 |     0.344 |             0.716 |           0.326 |             8.000 |     8.000 |         0.004 | IC helps                 |
+| M4         | M3           | w400     |    519.000 |       0.447 |     0.306 |             0.424 |           0.298 |             6.000 |     8.000 |         0.145 | no detectable gain       |

@@ -7,17 +7,29 @@ voltage logs like a real BMS produces?
 Work in progress. Current state: data loader with audit, a streaming-style window
 detector (arming band, first crossing, sample-gap check) with every "no estimate"
 counted by reason, a time-based ΔQ feature, incremental-capacity (IC) peak
-features, and mean / linear models (M0, M1 = ΔQ, M2 = ΔQ + IC peak) under nested
-leave-one-cell-out validation: each model picks its voltage window inside each
-outer fold using only the 7 training cells. Tables are in `results/clean_nested.md`
-(pooled), `results/clean_nested_per_cell.md`, `results/window_log.md` and
-`results/paired_ic.md` (M2 vs M1 on commonly answered traces, with the decision rule).
+features, and five models under nested leave-one-cell-out validation: M0 mean,
+M1 linear(ΔQ), M2 linear(ΔQ + IC peak), M3 GPR(ΔQ), M4 GPR(ΔQ + IC peak). Each
+model picks its voltage window inside each outer fold using only the 7 training
+cells. Tables are in `results/clean_nested.md` (pooled, with GPR 95 % coverage and
+interval width), `results/clean_nested_per_cell.md`, `results/window_log.md` and
+`results/paired_ic.md` (IC model vs its control on commonly answered traces, with
+the decision rule). `results/predictions_gpr.png` shows the held-out GPR errors with
+their 95 % bands.
 
 Known limitation of the IC features: settings (5 mV bins, Savitzky-Golay 7 bins,
 order 2) were frozen before the first run with IC. For windows starting at 3.8 V,
 early-life traces lose their IC estimate partly because the dQ/dV peak (~3.82 V)
-sits within the smoothing half-width of the window edge. As a result M2 has no
-100 mV window that answers 95 % of traces; that row is reported as not available.
+sits within the smoothing half-width of the window edge. As a result the IC models
+have no 100 mV window that answers 95 % of traces; that row is reported as not
+available.
+
+Known limitation of the GPR intervals: pooled 95 % coverage on held-out cells is
+87 % (M3) and 92 % (M4), below nominal. The shortfall is concentrated in cells 4
+and 7, whose error drifts with age: the intervals reflect noise within the training
+cells, not the spread between cells.
+
+`make reproduce` takes 10-15 minutes on an 8-core laptop; nearly all of it is
+about 950 GPR fits, run in parallel.
 
 ## Data
 

@@ -14,6 +14,7 @@ from soh.load import Curve  # noqa: E402
 from soh.report import save_fig  # noqa: E402
 
 WINDOW_COLORS = {"M1": "C0", "M2": "C1"}
+Z95 = 1.959964  # same constant as validate.Z95; not imported to avoid a cycle
 
 
 def frontier(pooled: pd.DataFrame, cells: pd.DataFrame, model: str = "M1") -> None:
@@ -79,3 +80,37 @@ def charge_curves(curves: list[Curve], windows: dict, cell: int = 1, every: int 
     fig.suptitle("Most-selected window per model (any-width regime)")
     save_fig(fig, "charge_curves_window.png")
 
+
+
+def predictions(preds: dict[str, pd.DataFrame], regime: str = "any") -> None:
+    """Held-out error per cell with each probabilistic model's 95 % predictive band.
+
+    The band covers the measured capacity where it crosses zero.
+    """
+    colors = {"M3": "C0", "M4": "C1"}
+    cells = sorted(next(iter(preds.values())).cell.unique())
+    fig, axes = plt.subplots(2, 4, figsize=(12, 5.6), sharex=True, sharey=True)
+    for ax, cell in zip(axes.flat, cells):
+        ax.axhline(0, color="k", lw=0.8)
+        for name, pred in preds.items():
+            g = pred[(pred.cell == cell) & pred.pred.notna()].sort_values("cycle")
+            col = colors.get(name, "C3")
+            err = 100 * (g.pred - g.capacity) / g.c0
+            half = 100 * Z95 * g["std"] / g.c0
+            inside = (err.abs() <= half).mean()
+            ax.fill_between(g.cycle, err - half, err + half, color=col, alpha=0.25, lw=0)
+            ax.plot(g.cycle, err, color=col, lw=1.0,
+                    label=f"{name} {g.v1.iloc[0]:.1f}-{g.v2.iloc[0]:.1f} V, covers {100 * inside:.0f} %")
+        ax.set_title(f"Cell {cell} (held out)", fontsize=9)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=6.5, loc="lower left")
+    ax.set_ylim(-4, 4)
+    for ax in axes[1]:
+        ax.set_xlabel("Cycle")
+    fig.supylabel("Predicted - measured [SOH points]", fontsize=10)
+    names = " vs ".join(preds)
+    fig.suptitle(
+        f"{names}: held-out error with 95 % predictive band (nested, {regime}-width regime); "
+        "band crossing zero = measurement covered"
+    )
+    save_fig(fig, "predictions_gpr.png")

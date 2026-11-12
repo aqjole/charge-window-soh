@@ -16,15 +16,23 @@ selection with the grid restricted to one width, reusing the cached inner scores
 A model answers a trace only when its features exist (reason OK). Training uses
 answered training traces; error metrics use answered held-out traces; every
 unanswered trace is counted by reason.
+
+Fits are shared where the training set is identical: the inner fit that leaves out
+{fold F, inner cell H} serves fold F (predicting H) and fold H (predicting F), and
+each outer fit (all cells but F) is made once and reused across regimes. GPR fits
+run in parallel; each is deterministic (fixed seed), so the order does not matter.
 """
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
+from itertools import combinations
 from math import comb
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 
 from soh.features import NO_ESTIMATE_REASONS, Reason, detect_window, ic_features
 from soh.load import Curve, load
@@ -38,6 +46,7 @@ CUTOFF_MARGIN_V = 0.050
 MIN_ANSWER_RATE = 0.95
 REGIMES = ("any",) + tuple(f"w{w}" for w in WIDTHS_MV)
 IC_HELPS_MIN_CELLS = 7  # decision rule: IC model better in >= 7 of 8 held-out cells
+Z95 = 1.959964  # two-sided 95 % normal quantile
 
 
 class SelectionError(RuntimeError):
@@ -87,35 +96,46 @@ def feature_table(curves: list[Curve], win: Win) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def fit_predict(df: pd.DataFrame, model: str, test_cells, train_cells) -> pd.DataFrame:
+    """Fit `model` on the answered rows of `train_cells`, predict the rows of `test_cells`.
+
+    Returns the test rows with `pred` and `std` in mAh (NaN where there is no estimate,
+    `std` NaN for models without one) and `reason` set to the model's own reason: for
+    IC models a missing IC peak is a no-estimate, with no fallback.
+    """
+    spec = MODELS[model]
+    reason = df.ic_reason if spec.needs_ic else df.reason
+    answered = reason == Reason.OK.value
+    train = df[df.cell.isin(train_cells) & answered]
+    test = df[df.cell.isin(test_cells)].assign(reason=reason, pred=np.nan, std=np.nan)
+    cols = list(spec.cols)
+    X = lambda d: d[cols].to_numpy() if cols else np.zeros((len(d), 1))  # noqa: E731
+    ok = test.reason == Reason.OK.value
+    if train.empty:
+        test.loc[ok, "reason"] = Reason.NO_TRAIN.value
+    elif ok.any():
+        m = spec.factory().fit(X(train), train.capacity.to_numpy())
+        if spec.has_std:
+            mu, sd = m.predict(X(test[ok]), return_std=True)
+            test.loc[ok, "pred"], test.loc[ok, "std"] = mu, sd
+        else:
+            test.loc[ok, "pred"] = m.predict(X(test[ok]))
+    return test
+
+
 def loco(df: pd.DataFrame, model: str, cells: list[int] | None = None) -> pd.DataFrame:
     """Leave-one-cell-out over `cells` (default: all cells in `df`).
 
     Each cell in `cells` is predicted by a model fit on the other cells in `cells`.
-    Rows of other cells are ignored. Returns the predicted rows with `pred` in mAh
-    (NaN where the model gives no estimate) and `reason` set to the model's own
-    reason: for IC models a missing IC peak is a no-estimate, with no fallback.
+    Rows of other cells are ignored.
     """
-    spec = MODELS[model]
     cells = sorted(df.cell.unique()) if cells is None else sorted(cells)
-    df = df[df.cell.isin(cells)].copy()
-    if spec.needs_ic:
-        df["reason"] = df.ic_reason
-    answered = df.reason == Reason.OK.value
-    cols = list(spec.cols)
-    X = lambda d: d[cols].to_numpy() if cols else np.zeros((len(d), 1))  # noqa: E731
-    out = []
-    for held in cells:
-        train = df[(df.cell != held) & answered]
-        test = df[df.cell == held].copy()
-        test["pred"] = np.nan
-        ok = test.reason == Reason.OK.value
-        if train.empty:
-            test.loc[ok, "reason"] = Reason.NO_TRAIN.value
-        elif ok.any():
-            m = spec.factory().fit(X(train), train.capacity.to_numpy())
-            test.loc[ok, "pred"] = m.predict(X(test[ok]))
-        out.append(test)
-    return pd.concat(out, ignore_index=True)
+    parts = [fit_predict(df, model, [h], [c for c in cells if c != h]) for h in cells]
+    return pd.concat(parts, ignore_index=True)
+
+
+def n_jobs(model: str) -> int:
+    return -1 if MODELS[model].has_std else 1
 
 
 def metrics(pred: pd.DataFrame) -> dict[str, float]:
@@ -133,17 +153,35 @@ def metrics(pred: pd.DataFrame) -> dict[str, float]:
         )
     else:
         stats = dict(rmse=np.nan, macro_rmse=np.nan, mae=np.nan, max_abs=np.nan)
+    if "std" in ans and ans["std"].notna().any():
+        half = Z95 * ans["std"]
+        stats["coverage95"] = float(np.mean(np.abs(ans.pred - ans.capacity) <= half))
+        stats["interval_width"] = float(np.mean(100.0 * 2 * half / ans.c0))  # SOH points
     counts = {f"n_{r.value}": int((pred.reason == r.value).sum()) for r in NO_ESTIMATE_REASONS}
     return dict(**stats, n=len(err), n_total=n_total, answer_rate=len(err) / n_total, **counts)
 
 
 def inner_scores(features: dict[Win, pd.DataFrame], model: str) -> pd.DataFrame:
-    """Inner leave-one-cell-out score of every (outer fold, window). Held-out cell excluded."""
+    """Inner leave-one-cell-out score of every (outer fold, window). Held-out cell excluded.
+
+    One fit per (window, cell pair {a, b}) on the other six cells; it predicts a for
+    fold b and b for fold a.
+    """
+    tasks = []
+    for win, df in features.items():
+        cells = sorted(df.cell.unique())
+        for a, b in combinations(cells, 2):
+            tasks.append((win, a, b, [c for c in cells if c not in (a, b)]))
+    fits = Parallel(n_jobs=n_jobs(model))(
+        delayed(fit_predict)(features[win], model, [a, b], train) for win, a, b, train in tasks
+    )
+    by_pair = {(win, a, b): f for (win, a, b, _), f in zip(tasks, fits)}
     rows = []
     for win, df in features.items():
         cells = sorted(df.cell.unique())
         for held in cells:
-            pred = loco(df, model, [c for c in cells if c != held])
+            parts = [by_pair[(win, min(held, h), max(held, h))] for h in cells if h != held]
+            pred = pd.concat([p[p.cell != held] for p in parts], ignore_index=True)
             m = metrics(pred)
             rows.append(
                 dict(
@@ -183,28 +221,42 @@ def select(scores: pd.DataFrame, regime: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def outer_predict(features: dict[Win, pd.DataFrame], model: str, chosen: pd.DataFrame) -> pd.DataFrame:
-    """Predict each held-out cell at its fold's chosen window, fit on the other 7 cells."""
-    out = []
-    for r in chosen.itertuples():
-        df = features[Win(r.v1, r.v2)]
-        pred = loco(df, model)
-        out.append(pred[pred.cell == r.fold].assign(v1=r.v1, v2=r.v2))
+def outer_fits(features: dict[Win, pd.DataFrame], model: str, keys) -> dict:
+    """Held-out predictions for each (window, fold) in `keys`, fit on the other cells."""
+    keys = sorted(set(keys))
+
+    def one(win, fold):
+        df = features[win]
+        return fit_predict(df, model, [fold], [c for c in df.cell.unique() if c != fold])
+
+    fits = Parallel(n_jobs=n_jobs(model))(delayed(one)(w, f) for w, f in keys)
+    return dict(zip(keys, fits))
+
+
+def outer_predict(fits: dict, chosen: pd.DataFrame) -> pd.DataFrame:
+    """Each held-out cell predicted at its fold's chosen window."""
+    out = [fits[(Win(r.v1, r.v2), r.fold)].assign(v1=r.v1, v2=r.v2) for r in chosen.itertuples()]
     return pd.concat(out, ignore_index=True)
 
 
 def nested(features: dict[Win, pd.DataFrame], model: str, regimes=REGIMES):
     """Return (pooled rows, per-cell rows, window log rows, inner scores, predictions by regime)."""
     scores = inner_scores(features, model)
-    pooled, cells, log, preds = [], [], [], {}
+    picks = {}
     for regime in regimes:
         try:
-            chosen = select(scores, regime)
+            picks[regime] = select(scores, regime)
         except SelectionError:
+            picks[regime] = None
+    keys = [(Win(r.v1, r.v2), r.fold) for c in picks.values() if c is not None for r in c.itertuples()]
+    fits = outer_fits(features, model, keys)
+    pooled, cells, log, preds = [], [], [], {}
+    for regime, chosen in picks.items():
+        if chosen is None:
             pooled.append(dict(model=model, regime=regime, n=0, answer_rate=0.0, windows=not_available(scores, regime)))
             preds[regime] = None
             continue
-        pred = outer_predict(features, model, chosen)
+        pred = outer_predict(fits, chosen)
         answered = pred.pred.notna()
         counts = chosen.apply(lambda r: f"{r.v1:.1f}-{r.v2:.1f}", axis=1).value_counts()
         windows = "; ".join(f"{w} x{n}" for w, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
@@ -286,7 +338,9 @@ def main() -> None:
 
     pooled, cells, log, scores, preds = [], [], [], [], {}
     for name in MODELS:
+        t0 = time.perf_counter()
         p, c, lg, s, pr = nested(features, name)
+        print(f"{name}: {time.perf_counter() - t0:.0f} s")
         pooled += p
         cells += c
         log += lg
@@ -311,7 +365,9 @@ def main() -> None:
         "n_<REASON> counts traces with no estimate. IC settings were frozen before the first run with "
         "M2. For windows starting at 3.8 V, early-life traces (first 600-800 cycles) give IC_EDGE "
         "partly because of a smoothing edge artifact: their dQ/dV peak (~3.82 V) lies within the "
-        "Savitzky-Golay half-width of V1, and edge extrapolation puts the maximum in the first bin."
+        "Savitzky-Golay half-width of V1, and edge extrapolation puts the maximum in the first bin. "
+        "GPR models (M3, M4): coverage95 is the share of answered traces whose measured capacity lies "
+        "inside the 95 % predictive interval; interval_width is its mean full width in SOH points."
     )
     pooled_df = pd.DataFrame(pooled)
     write_table(pooled_df, "clean_nested", "Clean data, nested validation", note)
@@ -338,8 +394,10 @@ def main() -> None:
         lambda g: g.groupby(["v1", "v2"]).size().idxmax(), include_groups=False
     )
     plots.charge_curves(curves, {m: Win(*common[m]) for m in ("M1", "M2")})
+    plots.predictions({m: preds[m]["any"] for m in ("M3", "M4")})
 
-    cols = ["model", "regime", "rmse", "macro_rmse", "mae", "max_abs", "answer_rate", "median_window_s", "windows"]
+    cols = ["model", "regime", "rmse", "macro_rmse", "mae", "max_abs", "answer_rate", "coverage95",
+            "interval_width", "median_window_s", "windows"]
     print(pooled_df[cols].to_string(index=False, float_format=lambda x: f"{x:.3f}"))
     print()
     print(pair_df.to_string(index=False, float_format=lambda x: f"{x:.3f}"))

@@ -209,3 +209,60 @@ def test_window_with_no_answered_training_traces():
     assert m["n"] == 0
     assert m["n_NO_TRAIN"] == 10  # cell 1 has IC but nothing to train on
     assert m["n_IC_EDGE"] == 70
+
+
+# --- shared inner fits, GPR models, coverage --------------------------------------------
+
+from soh.validate import Z95  # noqa: E402
+
+
+def test_shared_pair_fits_equal_plain_inner_loco():
+    feats = multi_window_features({Win(3.6, 3.8): 0.5, Win(3.5, 3.6): 2.0})
+    scores = inner_scores(feats, "M1")
+    for win, df in feats.items():
+        for held in range(1, 9):
+            plain = metrics(outer_loco(df, "M1", [c for c in range(1, 9) if c != held]))["macro_rmse"]
+            row = scores[(scores.fold == held) & (scores.v1 == win.v1) & (scores.v2 == win.v2)]
+            assert row.score.item() == pytest.approx(plain, rel=1e-12)
+
+
+def test_coverage_and_interval_width():
+    pred = pd.DataFrame(
+        dict(
+            cell=[1] * 4, reason=["OK"] * 4, c0=[700.0] * 4, capacity=[700.0] * 4,
+            pred=[700.0, 701.0, 703.0, 690.0], std=[1.0] * 4,
+        )
+    )
+    m = metrics(pred)
+    assert m["coverage95"] == pytest.approx(0.5)  # |err| 0, 1 inside 1.96; 3, 10 outside
+    assert m["interval_width"] == pytest.approx(100 * 2 * Z95 / 700)
+
+
+def test_point_models_report_no_coverage():
+    assert "coverage95" not in metrics(outer_loco(synthetic_table(), "M1"))
+
+
+def test_m3_fits_smooth_relation_with_calibrated_band():
+    pred = outer_loco(synthetic_table(noise=0.2), "M3")
+    m = metrics(pred)
+    assert m["answer_rate"] == 1.0
+    assert m["rmse"] < 0.5
+    assert m["coverage95"] >= 0.85
+    assert (pred["std"] > 0).all()
+
+
+def test_gpr_is_deterministic():
+    df = synthetic_table(noise=0.2)
+    a, b = outer_loco(df, "M3"), outer_loco(df, "M3")
+    # Fixed seed -> same optimum. Threaded BLAS (Accelerate) may differ at ~1e-10 mAh,
+    # far below the 4-decimal precision of the result tables.
+    np.testing.assert_allclose(a.pred, b.pred, rtol=0, atol=1e-6)
+    np.testing.assert_allclose(a["std"], b["std"], rtol=0, atol=1e-6)
+
+
+def test_m4_gives_no_estimate_without_ic():
+    df = with_ic(synthetic_table(noise=0.2))
+    df.loc[[0, 1], "ic_reason"] = ["IC_EDGE", "IC_SPARSE"]
+    df.loc[[0, 1], ["ic_peak_h", "ic_peak_v"]] = np.nan
+    m = metrics(outer_loco(df, "M4"))
+    assert (m["n_IC_EDGE"], m["n_IC_SPARSE"], m["n"]) == (1, 1, 78)
