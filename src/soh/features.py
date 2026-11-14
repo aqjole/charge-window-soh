@@ -3,16 +3,24 @@
 Current is assumed constant at the nominal 1C value, exactly as the C estimator
 does. Every trace either yields a window or a reason code; nothing is dropped.
 
-Crossing detector (same rules as the C estimator):
+Window detector, time-below-level (same rules as the C estimator):
 - Armed at the first sample with v < V1 - ARM_BAND_V.
-- t1: first upward V1 crossing after arming. t2: first upward V2 crossing at or
-  after the V1 crossing sample. A crossing of level L is the first sample pair
-  (k-1, k) with v[k-1] < L <= v[k]; its time is linearly interpolated.
-- Later dips below V1 (noise, repeated voltages) do not restart the window.
-- GAP if any two consecutive samples from the V1 bracket to the V2 bracket are
-  more than MAX_GAP_S apart.
+- Done at the first later sample with v >= V2 + END_BAND_V.
+- Between those two samples the voltage is taken as piecewise linear, and the time
+  it spends below V1 and below V2 is accumulated. t1 = t_arm + time below V1,
+  t2 = t_arm + time below V2, so the window duration is the time spent between
+  the two levels.
+- On a monotone trace this equals the first upward crossings, linearly
+  interpolated. With noise, repeated crossings of a level average out instead of
+  the first one winning, which removes the early bias of a first-crossing rule
+  (about sigma / (dV/dt) per level).
+- NO_V2 if the trace never reaches V2 + END_BAND_V. GAP if a segment that
+  contributes window time is longer than MAX_GAP_S.
 
-IC features (used by M2/M4 only), from the samples inside the window (k1..k2-1):
+`detect_first_crossing` is the rule used up to commit 6. It is kept only as the
+baseline in the degraded-log comparison.
+
+IC features (used by M2/M4 only), from the samples with t1 <= t < t2:
 - bin samples by voltage into IC_BIN_V bins from V1 to V2; per bin, mean sample
   time since t1 -> q = I * t / 3600 [mAh]; empty bins filled by linear interpolation;
 - Savitzky-Golay first derivative (IC_SG_LEN bins, order IC_SG_ORDER) -> dQ/dV [mAh/V];
@@ -31,6 +39,7 @@ from scipy.signal import savgol_filter
 from soh import NOMINAL_CURRENT_MA
 
 ARM_BAND_V = 0.010
+END_BAND_V = 0.030  # must not exceed the window grid's margin to the charge cutoff
 MAX_GAP_S = 120.0
 
 IC_BIN_V = 0.005
@@ -42,7 +51,7 @@ IC_MAX_EMPTY = 0.5
 class Reason(str, Enum):
     OK = "OK"
     NOT_ARMED = "NOT_ARMED"  # no sample below V1 - ARM_BAND_V
-    NO_V2 = "NO_V2"  # window never completes (V1 or V2 never crossed after arming)
+    NO_V2 = "NO_V2"  # window never completes (never reaches V2 + END_BAND_V after arming)
     GAP = "GAP"  # sample gap above MAX_GAP_S inside the window
     IC_SPARSE = "IC_SPARSE"  # more than IC_MAX_EMPTY of the voltage bins have no sample
     IC_EDGE = "IC_EDGE"  # dQ/dV maximum in the first or last bin, or not positive
@@ -60,8 +69,8 @@ class Window:
     duration_s: float = float("nan")
     t1: float = float("nan")
     t2: float = float("nan")
-    k1: int = -1  # sample index that completes the V1 crossing
-    k2: int = -1  # sample index that completes the V2 crossing
+    k1: int = -1  # first sample index at or after t1
+    k2: int = -1  # first sample index at or after t2
 
     @property
     def ok(self) -> bool:
@@ -82,6 +91,17 @@ def crossing_time(t: np.ndarray, v: np.ndarray, level: float, start: int = 0) ->
     return float(t0 + (level - v0) * (t1 - t0) / (v1 - v0)), k
 
 
+def time_below(t: np.ndarray, v: np.ndarray, level: float) -> np.ndarray:
+    """Per segment (k, k+1): time the linearly interpolated voltage spends below `level`."""
+    a, b = v[:-1], v[1:]
+    frac = ((a < level) & (b < level)).astype(float)
+    up = (a < level) & (b >= level)
+    down = (a >= level) & (b < level)
+    frac[up] = (level - a[up]) / (b[up] - a[up])
+    frac[down] = (level - b[down]) / (a[down] - b[down])
+    return frac * np.diff(t)
+
+
 def detect_window(
     t: np.ndarray,
     v: np.ndarray,
@@ -90,7 +110,38 @@ def detect_window(
     current_ma: float = NOMINAL_CURRENT_MA,
     arm_band_v: float = ARM_BAND_V,
     max_gap_s: float = MAX_GAP_S,
+    end_band_v: float = END_BAND_V,
 ) -> Window:
+    """Time-below-level window detector (see module docstring)."""
+    armed = np.flatnonzero(v < v1 - arm_band_v)
+    if armed.size == 0:
+        return Window(Reason.NOT_ARMED)
+    s = int(armed[0])
+    done = np.flatnonzero(v[s:] >= v2 + end_band_v)
+    if done.size == 0:
+        return Window(Reason.NO_V2)
+    e = s + int(done[0])
+    ts, vs = t[s : e + 1], v[s : e + 1]
+    below1, below2 = time_below(ts, vs, v1), time_below(ts, vs, v2)
+    if (np.diff(ts)[below2 - below1 > 0] > max_gap_s).any():
+        return Window(Reason.GAP)
+    t1, t2 = float(ts[0] + below1.sum()), float(ts[0] + below2.sum())
+    duration = t2 - t1
+    eps = 1e-9  # a level met exactly on a sample belongs to the window
+    k1, k2 = int(np.searchsorted(t, t1 - eps)), int(np.searchsorted(t, t2 - eps))
+    return Window(Reason.OK, current_ma * duration / 3600.0, duration, t1, t2, k1, k2)
+
+
+def detect_first_crossing(
+    t: np.ndarray,
+    v: np.ndarray,
+    v1: float,
+    v2: float,
+    current_ma: float = NOMINAL_CURRENT_MA,
+    arm_band_v: float = ARM_BAND_V,
+    max_gap_s: float = MAX_GAP_S,
+) -> Window:
+    """Baseline: first upward V1 crossing after arming, then first upward V2 crossing."""
     armed = np.flatnonzero(v < v1 - arm_band_v)
     if armed.size == 0:
         return Window(Reason.NOT_ARMED)

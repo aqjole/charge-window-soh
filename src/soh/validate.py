@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 
-from soh.features import NO_ESTIMATE_REASONS, Reason, detect_window, ic_features
+from soh.features import END_BAND_V, NO_ESTIMATE_REASONS, Reason, detect_window, ic_features
 from soh.load import Curve, load
 from soh.models import MODELS, PAIRS
 from soh import plots
@@ -68,16 +68,17 @@ class Win:
 
 def window_grid(cutoff_v: float) -> list[Win]:
     """V1 x width grid, keeping only V2 <= cutoff - 50 mV."""
+    assert END_BAND_V < CUTOFF_MARGIN_V, "detector end band must fit below the charge cutoff"
     v2_max = cutoff_v - CUTOFF_MARGIN_V + 1e-9
     return [
         Win(v1, round(v1 + w / 1000, 3)) for v1 in V1_GRID for w in WIDTHS_MV if v1 + w / 1000 <= v2_max
     ]
 
 
-def feature_table(curves: list[Curve], win: Win) -> pd.DataFrame:
+def feature_table(curves: list[Curve], win: Win, detector=detect_window) -> pd.DataFrame:
     rows = []
     for c in curves:
-        w = detect_window(c.t, c.v, win.v1, win.v2)
+        w = detector(c.t, c.v, win.v1, win.v2)
         ic = ic_features(c.t, c.v, w, win.v1, win.v2)
         rows.append(
             dict(

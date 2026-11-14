@@ -116,12 +116,16 @@ def predictions(preds: dict[str, pd.DataFrame], regime: str = "any") -> None:
     save_fig(fig, "predictions_gpr.png")
 
 
-def degraded(summary: pd.DataFrame, models=("M1", "M2", "M3", "M4")) -> None:
+def degraded(summary: pd.DataFrame, models=("M1", "M2", "M3", "M4"), baseline_models=("M1", "M3")) -> None:
     """Held-out RMSE at each level of each degradation sweep, one line per model.
 
-    Levels where a model answers under 100 % of traces are labelled with the answer
-    rate; levels with no answers are marked on the x axis.
+    Solid: the project's window detector. Dashed: the first-crossing baseline, for
+    the ΔQ-only models (the IC models change little). Levels where a model answers
+    under 100 % of traces are labelled with the answer rate; levels with no answers
+    are marked on the x axis.
     """
+    base = summary[summary.detector == "first-crossing"]
+    summary = summary[summary.detector == "time-below"]
     colors = {"M1": "C0", "M2": "C1", "M3": "C2", "M4": "C3"}
     panels = [
         ("Voltage noise sigma [mV]", ["clean", "noise 1 mV", "noise 2 mV", "noise 5 mV", "noise 10 mV"], ["0", "1", "2", "5", "10"]),
@@ -133,9 +137,13 @@ def degraded(summary: pd.DataFrame, models=("M1", "M2", "M3", "M4")) -> None:
     fig, axes = plt.subplots(1, len(panels), figsize=(16, 4.2), gridspec_kw=dict(width_ratios=[5, 4, 3, 3, 2.4]))
     for ax, (title, cases, ticks) in zip(axes, panels):
         x = range(len(cases))
+        for m in baseline_models:
+            g = base[base.model == m].set_index("case").loc[cases]
+            ax.plot(x, g.rmse, "--", lw=1.1, color=colors[m], alpha=0.8,
+                    label=f"{m}, first-crossing detector" if ax is axes[0] else None)
         for m in models:
             g = summary[summary.model == m].set_index("case").loc[cases]
-            ax.plot(x, g.rmse, "-o", ms=4, color=colors[m], label=m)
+            ax.plot(x, g.rmse, "-o", ms=4, color=colors[m], label=m if ax is axes[0] else None)
             for xi, (rate, rmse) in enumerate(zip(g.answer_rate, g.rmse)):
                 if rate == 0:
                     ax.plot(xi, 0, "x", color=colors[m], ms=9, mew=2, clip_on=False)
@@ -152,5 +160,5 @@ def degraded(summary: pd.DataFrame, models=("M1", "M2", "M3", "M4")) -> None:
     axes[0].set_ylabel("Held-out RMSE [SOH points]")
     axes[0].legend(fontsize=8, loc="upper left")
     fig.suptitle("Frozen fold models (any-width windows) on degraded copies of their held-out cell; "
-                 "answer rate is 100 % unless marked")
+                 "dashed: old first-crossing detector; answer rate is 100 % unless marked")
     save_fig(fig, "degraded.png")

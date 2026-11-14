@@ -15,6 +15,11 @@ Window detection and feature extraction then run on the degraded trace.
 Randomness is per trace, from `default_rng([seed, cell, cycle])`, so a result does
 not depend on processing order and every case sees the same random numbers for the
 same seed. Cases with nothing random run once (seed 0).
+
+Every case runs twice: with the project's window detector (time-below-level) and,
+as a baseline, with the first-crossing rule used up to commit 6. The baseline's
+fold models are refit on clean first-crossing features at the same windows, so the
+two rows differ only in the detector.
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ import pandas as pd
 from joblib import Parallel, delayed
 
 from soh import plots
-from soh.features import detect_window, ic_features
+from soh.features import detect_first_crossing, detect_window, ic_features
 from soh.load import Curve, load
 from soh.models import MODELS, PAIRS
 from soh.report import RESULTS, write_table
@@ -36,6 +41,8 @@ from soh.validate import IC_HELPS_MIN_CELLS, Win, feature_table, fit_model, metr
 NATIVE_PERIOD_S = 1.0
 SEEDS = tuple(range(20))
 REGIME = "any"
+DETECTORS = {"time-below": detect_window, "first-crossing": detect_first_crossing}
+MAIN_DETECTOR = "time-below"
 
 
 @dataclass(frozen=True)
@@ -94,13 +101,15 @@ def trace_rng(seed: int, cell: int, cycle: int) -> np.random.Generator:
     return np.random.default_rng([seed, cell, cycle])
 
 
-def degraded_features(curves: list[Curve], case: Case, seed: int, windows_by_cell: dict[int, set[Win]]) -> dict[Win, pd.DataFrame]:
+def degraded_features(
+    curves: list[Curve], case: Case, seed: int, windows_by_cell: dict[int, set[Win]], detector=detect_window
+) -> dict[Win, pd.DataFrame]:
     """Feature tables (same columns as `feature_table`) of the degraded traces, per window."""
     rows: dict[Win, list[dict]] = {}
     for c in curves:
         t, v = degrade(c.t, c.v, case, trace_rng(seed, c.cell, c.cycle))
         for win in windows_by_cell[c.cell]:
-            w = detect_window(t, v, win.v1, win.v2)
+            w = detector(t, v, win.v1, win.v2)
             ic = ic_features(t, v, w, win.v1, win.v2)
             rows.setdefault(win, []).append(
                 dict(
@@ -112,11 +121,11 @@ def degraded_features(curves: list[Curve], case: Case, seed: int, windows_by_cel
     return {win: pd.DataFrame(r) for win, r in rows.items()}
 
 
-def fold_models(curves: list[Curve], log: pd.DataFrame) -> dict[tuple[str, int], tuple[Win, object]]:
+def fold_models(curves: list[Curve], log: pd.DataFrame, detector=detect_window) -> dict[tuple[str, int], tuple[Win, object]]:
     """(model, fold) -> (selected window, model fit on the clean training cells)."""
     chosen = log[log.regime == REGIME]
     wins = {Win(r.v1, r.v2) for r in chosen.itertuples()}
-    feats = {w: feature_table(curves, w) for w in wins}
+    feats = {w: feature_table(curves, w, detector) for w in wins}
     cells = sorted({c.cell for c in curves})
     out = {}
     for r in chosen.itertuples():
@@ -125,23 +134,24 @@ def fold_models(curves: list[Curve], log: pd.DataFrame) -> dict[tuple[str, int],
     return out
 
 
-def run_one(curves: list[Curve], case: Case, seed: int, models: dict) -> pd.DataFrame:
+def run_one(curves: list[Curve], case: Case, seed: int, models: dict, detector: str = MAIN_DETECTOR) -> pd.DataFrame:
     windows_by_cell: dict[int, set[Win]] = {}
     for (_, fold), (win, _) in models.items():
         windows_by_cell.setdefault(fold, set()).add(win)
-    feats = degraded_features(curves, case, seed, windows_by_cell)
+    feats = degraded_features(curves, case, seed, windows_by_cell, DETECTORS[detector])
     out = []
     for (model, fold), (win, est) in models.items():
         df = feats[win]
         out.append(predict_rows(est, df[df.cell == fold], model).assign(model=model, v1=win.v1, v2=win.v2))
-    return pd.concat(out, ignore_index=True).assign(case=case.name, seed=seed)
+    return pd.concat(out, ignore_index=True).assign(case=case.name, seed=seed, detector=detector)
 
 
 def summarize(preds: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Per case and model: metrics pooled over seeds; paired IC comparisons per case."""
+    """Per detector, case and model: metrics pooled over seeds; paired IC comparisons
+    per case for the main detector."""
     rows, pair_rows = [], []
-    for case in CASES:
-        pc = preds[preds.case == case.name]
+    for det, case in [(d, c) for d in DETECTORS for c in CASES]:
+        pc = preds[(preds.case == case.name) & (preds.detector == det)]
         n_seeds = pc.seed.nunique()
         for model in MODELS:
             m = metrics(pc[pc.model == model])
@@ -149,7 +159,7 @@ def summarize(preds: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             counts = {k: v / n_seeds for k, v in m.items() if k.startswith("n_") and k != "n_total"}
             rows.append(
                 dict(
-                    case=case.name, factor=case.factor, model=model, n_seeds=n_seeds,
+                    detector=det, case=case.name, factor=case.factor, model=model, n_seeds=n_seeds,
                     rmse=m["rmse"], macro_rmse=m["macro_rmse"], mae=m["mae"], max_abs=m["max_abs"],
                     rmse_seed_min=seed_rmse.min(), rmse_seed_max=seed_rmse.max(),
                     answer_rate=m["answer_rate"],
@@ -157,6 +167,8 @@ def summarize(preds: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
                     **counts,
                 )
             )
+        if det != MAIN_DETECTOR:
+            continue
         for ic_model, base in PAIRS:
             a, b = pc[pc.model == ic_model], pc[pc.model == base]
             # pooled over seeds: per-cell RMSE over every (seed, trace) both models answered
@@ -174,9 +186,9 @@ def main() -> None:
     curves, _ = load()
     log = pd.read_csv(RESULTS / "window_log.csv")
     t0 = time.perf_counter()
-    models = fold_models(curves, log)
-    tasks = [(case, seed) for case in CASES for seed in case.seeds]
-    parts = Parallel(n_jobs=-1)(delayed(run_one)(curves, case, seed, models) for case, seed in tasks)
+    models = {det: fold_models(curves, log, fn) for det, fn in DETECTORS.items()}
+    tasks = [(det, case, seed) for det in DETECTORS for case in CASES for seed in case.seeds]
+    parts = Parallel(n_jobs=-1)(delayed(run_one)(curves, case, seed, models[det], det) for det, case, seed in tasks)
     preds = pd.concat(parts, ignore_index=True)
     print(f"{len(tasks)} degraded runs in {time.perf_counter() - t0:.0f} s")
 
@@ -185,7 +197,7 @@ def main() -> None:
     # Consistency gate: the clean case must reproduce the nested any-width result exactly.
     nested_df = pd.read_csv(RESULTS / "clean_nested.csv")
     ref = nested_df[nested_df.regime == REGIME].set_index("model").rmse
-    got = summary[summary.case == "clean"].set_index("model").rmse
+    got = summary[(summary.case == "clean") & (summary.detector == MAIN_DETECTOR)].set_index("model").rmse
     if not np.allclose(got[ref.index], ref, atol=1e-4, equal_nan=True):
         raise RuntimeError(f"clean case does not match clean_nested:\n{pd.concat([ref, got], axis=1)}")
 
@@ -195,8 +207,10 @@ def main() -> None:
         "Degradation order: sample-and-hold decimation with random phase, offset + Gaussian noise, "
         "rounding to the LSB. Metrics pooled over seeds (20 where noise or phase is random, else 1); "
         "rmse_seed_min/max give the spread of per-seed RMSE; n_<REASON> are mean counts per run. "
-        "Errors in SOH percentage points on answered traces. Current-sensor error is not tested: "
-        "there is no current channel, and a gain error maps one-to-one into dq."
+        "Errors in SOH percentage points on answered traces. detector `time-below` is the project's "
+        "window detector; `first-crossing` is the rule used up to commit 6, kept as a baseline "
+        "(fold models refit on its clean features at the same windows). Current-sensor error is not "
+        "tested: there is no current channel, and a gain error maps one-to-one into dq."
     )
     write_table(summary, "degraded", "Degraded-log tests", note)
     pair_note = (
@@ -208,7 +222,7 @@ def main() -> None:
     write_table(pairs, "degraded_paired_ic", "Degraded-log tests: paired IC comparison", pair_note)
     plots.degraded(summary)
 
-    cols = ["case", "model", "rmse", "rmse_seed_min", "rmse_seed_max", "max_abs", "answer_rate", "coverage95"]
+    cols = ["detector", "case", "model", "rmse", "rmse_seed_min", "rmse_seed_max", "max_abs", "answer_rate", "coverage95"]
     print(summary[cols].to_string(index=False, float_format=lambda x: f"{x:.3f}"))
     print()
     pcols = ["case", "ic_model", "base_model", "n_common", "rmse_base", "rmse_ic", "cells_ic_better", "seeds_ic_helps", "verdict"]

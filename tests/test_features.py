@@ -1,7 +1,15 @@
 import numpy as np
 import pytest
 
-from soh.features import ARM_BAND_V, MAX_GAP_S, Reason, crossing_time, detect_window
+from soh.features import (
+    ARM_BAND_V,
+    END_BAND_V,
+    MAX_GAP_S,
+    Reason,
+    crossing_time,
+    detect_first_crossing,
+    detect_window,
+)
 
 V1, V2 = 3.6, 4.0
 I_MA = 740.0
@@ -98,13 +106,46 @@ def test_arms_on_later_dip():
     assert w.t1 == pytest.approx(100 + 14, abs=1e-6)  # 3.585 + 0.015
 
 
-def test_noisy_crossing_uses_first_crossing_only():
-    # Crosses V1 at t=2, dips back below at t=3, re-crosses at t=4: window starts at the first.
+def test_repeated_crossings_average_instead_of_first_winning():
+    # Crosses V1 at 1.5, dips back below at ~2.09, re-crosses at ~3.05.
+    # t1 = time spent below V1 = 1 + 0.5 + 0.001/0.011 + 0.001/0.021.
     t = np.arange(0.0, 9.0, 1.0)
     v = np.array([3.58, 3.59, 3.61, 3.599, 3.62, 3.8, 3.95, 4.05, 4.1])
     w = detect_window(t, v, V1, V2)
-    assert w.t1 == pytest.approx(1.5)
-    assert w.k1 == 2
+    assert w.t1 == pytest.approx(1 + 0.5 + 0.001 / 0.011 + 0.001 / 0.021)
+    assert detect_first_crossing(t, v, V1, V2).t1 == pytest.approx(1.5)  # the old rule
+
+
+def test_equals_first_crossing_on_monotone_traces():
+    for dt in (1.0, 7.0, 60.0):
+        t, v = linear_trace(dt=dt)
+        a, b = detect_window(t, v, V1, V2), detect_first_crossing(t, v, V1, V2)
+        assert (a.t1, a.t2) == (pytest.approx(b.t1), pytest.approx(b.t2))
+    t = np.arange(0.0, 2000.0, 1.0)
+    v = np.where(t <= 350, 3.0 + 0.002 * t, 3.7 + 0.0005 * (t - 350))
+    a, b = detect_window(t, v, V1, V2), detect_first_crossing(t, v, V1, V2)
+    assert a.dq == pytest.approx(b.dq)
+
+
+def test_noise_does_not_bias_the_window():
+    # 0.1 mV/s, like the flat part of the charge curve; 5 mV noise.
+    rng = np.random.default_rng(0)
+    t = np.arange(0.0, 6000.0)
+    v = 3.5 + 1e-4 * t
+    new, old = [], []
+    for _ in range(50):
+        vn = v + rng.normal(0, 0.005, len(v))
+        new.append(detect_window(t, vn, 3.8, 4.0).t1 - 3000.0)
+        old.append(detect_first_crossing(t, vn, 3.8, 4.0).t1 - 3000.0)
+    assert abs(np.mean(new)) < 3.0  # seconds
+    assert np.mean(old) < -60.0  # the first-crossing rule fires early
+
+
+def test_no_v2_until_end_band_is_reached():
+    t, v = linear_trace(v_end=V2 + END_BAND_V - 0.002)
+    assert detect_window(t, v, V1, V2).reason is Reason.NO_V2
+    t, v = linear_trace(v_end=V2 + END_BAND_V + 0.002)
+    assert detect_window(t, v, V1, V2).reason is Reason.OK
 
 
 def test_repeated_voltage_samples_at_level():
@@ -164,8 +205,13 @@ def test_gap_across_v2_crossing():
 
 
 def test_gap_outside_window_is_ignored():
-    assert detect_window(*gapped_trace(100, 300), V1, V2).reason is Reason.OK
-    assert detect_window(*gapped_trace(1010, 300), V1, V2).reason is Reason.OK
+    assert detect_window(*gapped_trace(100, 300), V1, V2).reason is Reason.OK  # before V1
+    assert detect_window(*gapped_trace(1040, 150), V1, V2).reason is Reason.OK  # after V2 + end band
+
+
+def test_gap_between_v2_and_end_band_is_ignored():
+    # V2 at t=1000, V2 + END_BAND_V at t=1030: no window time accrues above V2.
+    assert detect_window(*gapped_trace(1001, MAX_GAP_S + 20), V1, V2).reason is Reason.OK
 
 
 # --- IC features -------------------------------------------------------------------------
