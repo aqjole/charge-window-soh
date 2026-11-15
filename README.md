@@ -87,6 +87,12 @@ What the table shows:
 - **Calibrated intervals hold on clean data but not off it.** Calibrated M3 and M5
   intervals cover only 53-66 % under a ±5 mV offset (M6 86-92 %); M4 covers 49 % at
   5 mV noise.
+- **Averaging a few charges removes most of the random part.** A BMS sees a charge
+  every cycle, so it can average its last estimates. With the mean of 5 simulated
+  repeats, the combined case drops from 0.59 to 0.44 (M5) and 0.46 (M6), close to
+  their clean 0.41 and 0.42. It does not repair the IC models under noise (M4 at
+  10 mV: 2.33 to 2.25), where the error is a bias, and it cannot remove a constant
+  offset ([details](results/README.md#averaging-over-charges)).
 
 Per-cell tables, the window-width trade-off, interval calibration and every
 degraded case are in [`results/`](results/README.md).
@@ -194,9 +200,13 @@ against Python on synthetic traces that exercise every reason code.
   0.47-0.48, and stays below 0.6 in every tested condition. Porting it needs a GPR
   prediction in C (training inputs and weights in the generated header), a third
   accumulator for the window midpoint, and M6's own window (3.6-4.0 V in 7 of 8 folds).
+  A running mean of the last 5 estimates on top is one more accumulator and takes M6
+  from 0.59 to 0.46 in the combined case.
 - **Below 0.31 on clean logs, nothing is demonstrated.** Giving each cell its own
   beginning-of-life charge curve as a reference was screened and did not help
-  ([`results/`](results/README.md#beginning-of-life-reference)).
+  ([`results/`](results/README.md#beginning-of-life-reference)). The headroom is
+  small: the capacity of the complete charge, as a single input, also gives 0.31
+  ([`results/`](results/README.md#headroom-on-clean-logs)).
 - **Any further model is judged by the same rule:** better on at least 7 of 8 held-out
   cells, with worst-cell RMSE and max error reported next to it.
 

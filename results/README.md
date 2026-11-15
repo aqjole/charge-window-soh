@@ -18,6 +18,7 @@ the cell's first capacity, on answered traces only. The top-level
 | [`inner_scores.md`](inner_scores.md) | Every inner leave-one-cell-out score behind those choices |
 | [`degraded.md`](degraded.md), [`degraded.png`](degraded.png) | Every model under every degraded-log case, both window detectors, seed spread |
 | [`degraded_paired.md`](degraded_paired.md) | Paired verdicts per degraded case |
+| [`degraded_avg.md`](degraded_avg.md) | Mean of 5 charges against a single charge, per degraded case with random noise or phase |
 | [`accuracy_vs_window.png`](accuracy_vs_window.png) | M1 accuracy against window length |
 | [`charge_curves_window.png`](charge_curves_window.png) | Charge and IC curves of cell 1 with the most-selected windows |
 | [`predictions_gpr.png`](predictions_gpr.png) | M3 and M4 held-out error over life, with calibrated 95 % bands |
@@ -113,6 +114,23 @@ only, with M3 at 3.5-3.9 V and M4 and M5 at 3.6-4.0 V. It was screened and not a
   changes, gave 0.49-0.58 against 0.45 (M3) and 0.33 (M5) at the same windows. One
   variant, two segments plus their changes at 3.6-4.0 V, reached 2.03.
 
+### Headroom on clean logs
+
+A fixed-window leave-one-cell-out check (not nested, not part of `make reproduce`)
+looked at how much error is left to remove:
+
+- **The labels repeat to about 0.13 points.** This is the check-to-check scatter of
+  the measured capacity around its trend, so no estimator can score below it.
+- **The complete charge gives 0.31.** A linear model on the capacity of the whole
+  charge, from empty to the cutoff, reaches 0.31. M4 gets the same from a 34-minute
+  window.
+- **With everything, 0.24.** A GPR on the complete-charge capacity plus the two
+  segments at 3.6-4.0 V reached 0.24. It needs a full charge from empty, which is
+  outside the question here.
+- **Averaging the M4 and M5 estimates** gave 0.27 against M4's 0.31 at 3.6-4.0 V,
+  better on 7 of 8 cells. It was not added: the gain is small and half of the
+  estimate inherits M4's noise sensitivity.
+
 ### GPR intervals
 
 ![GPR held-out error with calibrated bands](predictions_gpr.png)
@@ -188,6 +206,34 @@ Paired verdicts across cases ([`degraded_paired.md`](degraded_paired.md)):
   steps, logging up to 30 s and the combined case. It fails at 5 and 10 mV noise.
 - **M4 vs M3:** IC helps the GPR only under offset.
 - **M5 vs M3:** never a detectable gain.
+
+### Averaging over charges
+
+A BMS sees a charge every cycle, and SOH moves by under 0.005 points per cycle, so
+it can average its last few estimates. The dataset has one charge per 100 cycles, so
+the repeats are simulated: the 20 seeds of a case are independent logs of the same
+charge, split into blocks of 5, and each block's estimates are averaged
+([`degraded_avg.md`](degraded_avg.md)). RMSE, single charge → mean of 5:
+
+| Case | M1 | M2 | M3 | M4 | M5 | M6 |
+|---|---:|---:|---:|---:|---:|---:|
+| Noise 2 mV | 0.69 → 0.67 | 0.53 → 0.51 | 0.46 → 0.45 | 0.42 → 0.35 | 0.43 → 0.41 | 0.44 → 0.43 |
+| Noise 5 mV | 0.71 → 0.66 | 0.79 → 0.76 | 0.48 → 0.45 | 1.04 → 0.96 | 0.47 → 0.42 | 0.47 → 0.43 |
+| Noise 10 mV | 0.84 → 0.75 | 1.56 → 1.52 | 0.54 → 0.48 | 2.33 → 2.25 | 0.67 → 0.58 | 0.58 → 0.48 |
+| One sample per 30 s | 0.67 → 0.67 | 0.57 → 0.52 | 0.45 → 0.45 | 0.66 → 0.44 | 0.41 → 0.41 | 0.42 → 0.42 |
+| Combined | 0.84 → 0.71 | 0.63 → 0.54 | 0.55 → 0.48 | 0.81 → 0.54 | 0.59 → 0.44 | 0.59 → 0.46 |
+
+- **It brings the ΔQ models back near their clean level** where the damage is
+  random: in the combined case M5 ends at 0.44 (clean 0.41) and M6 at 0.46 (clean
+  0.42). Their largest miss also shrinks (M5 7.3 to 5.0, M6 4.3 to 3.2).
+- **It does not repair the IC models under noise.** M4 at 10 mV stays at 2.25:
+  noise flattens the IC peak the same way in every charge, so the error is a bias.
+  Where the IC error is random, from the sampling phase, averaging removes it (M4
+  at 30 s: 0.66 to 0.44).
+- **It does nothing for an error that repeats**, such as a constant offset. Those
+  cases have a single run and are not in the table.
+- **The 7-of-8-cells rule is not applied.** On the same charges a mean cannot have
+  a higher RMSE than its members, so the rule would pass by construction.
 
 ### Interval coverage off clean data
 

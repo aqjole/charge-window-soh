@@ -1,7 +1,21 @@
 import numpy as np
+import pandas as pd
 import pytest
 
-from soh.degrade import CASES, NATIVE_PERIOD_S, SEEDS, Case, decimate, degrade, quantize, trace_rng
+from soh.degrade import (
+    AVG_CHARGES,
+    CASES,
+    MAIN_DETECTOR,
+    NATIVE_PERIOD_S,
+    SEEDS,
+    Case,
+    average_charges,
+    decimate,
+    degrade,
+    quantize,
+    summarize_avg,
+    trace_rng,
+)
 
 
 def trace(n=3000):
@@ -81,3 +95,43 @@ def test_seeds_only_where_random():
     assert by_name["combined"].seeds == SEEDS
     for name in ("clean", "offset -5 mV", "LSB 5 mV", "period 1 s"):
         assert by_name[name].seeds == (0,)
+
+
+def fake_preds(case="noise 2 mV", model="M1", sigma=1.0, bias=0.0, n_cycles=40):
+    """Predictions with capacity 100 and c0 100, so an error in mAh is one in SOH points."""
+    rng = np.random.default_rng(0)
+    rows = [
+        dict(case=case, detector=MAIN_DETECTOR, model=model, seed=s, cell=cell, cycle=cyc,
+             pred=100.0 + bias + sigma * rng.normal(), capacity=100.0, c0=100.0)
+        for s in SEEDS for cell in range(1, 9) for cyc in range(n_cycles)
+    ]
+    return pd.DataFrame(rows)
+
+
+def test_average_charges_blocks_and_unanswered():
+    p = pd.DataFrame(dict(case="c", model="M1", cell=1, cycle=0, seed=range(10), capacity=100.0, c0=100.0,
+                          pred=[1.0, 2.0, 3.0, 4.0, np.nan] + [np.nan] * 5))
+    a = average_charges(p, 5).set_index("block")
+    assert a.pred[0] == pytest.approx(2.5) and a.n_answered[0] == 4
+    assert np.isnan(a.pred[1]) and a.n_answered[1] == 0
+
+
+def avg_row(preds, case, model):
+    return summarize_avg(preds).set_index(["case", "model"]).loc[(case, model)]
+
+
+def test_averaging_shrinks_random_error_only():
+    noisy = avg_row(fake_preds(sigma=1.0), "noise 2 mV", "M1")
+    assert AVG_CHARGES == 5 and noisy.n_blocks == 4
+    assert noisy.rmse_single == pytest.approx(1.0, rel=0.05)
+    assert noisy.rmse_avg == pytest.approx(1.0 / np.sqrt(5), rel=0.05)
+    assert noisy.max_abs_avg < noisy.max_abs_single
+    biased = avg_row(fake_preds(sigma=0.0, bias=2.0), "noise 2 mV", "M1")
+    assert biased.rmse_avg == pytest.approx(biased.rmse_single) == pytest.approx(2.0)
+    assert biased.worst_cell_avg == pytest.approx(biased.worst_cell_single)
+
+
+def test_averaging_reports_models_without_answers():
+    p = fake_preds(case="period 60 s", model="M2").assign(pred=np.nan)
+    row = avg_row(p, "period 60 s", "M2")
+    assert row.n_blocks == 4 and np.isnan(row.rmse_single) and np.isnan(row.rmse_avg)

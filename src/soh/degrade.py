@@ -23,6 +23,15 @@ two rows differ only in the detector.
 
 Calibrated GPR intervals use each fold's k95 from the clean inner fits (window log),
 for the main detector only.
+
+Averaging over charges: a BMS sees a charge every cycle, and SOH moves far less per
+cycle than any error here, so it can average its last few estimates. The seeds of a
+random case are independent logs of the same charge, so the mean estimate over a
+block of AVG_CHARGES seeds stands in for that. The 7-of-8-cells rule is not applied:
+on the same charges a mean can never have a higher RMSE than its members, so the
+rule would pass by construction. The table reports the size of the gain instead.
+Cases with nothing random have one seed and are left out: a constant error does not
+average out.
 """
 
 from __future__ import annotations
@@ -46,6 +55,7 @@ SEEDS = tuple(range(20))
 REGIME = "any"
 DETECTORS = {"time-below": detect_window, "first-crossing": detect_first_crossing}
 MAIN_DETECTOR = "time-below"
+AVG_CHARGES = 5  # estimates averaged per block of seeds
 
 
 @dataclass(frozen=True)
@@ -183,6 +193,44 @@ def summarize(preds: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.DataFrame(rows), pd.DataFrame(pair_rows)
 
 
+def average_charges(preds: pd.DataFrame, n: int = AVG_CHARGES) -> pd.DataFrame:
+    """Mean estimate per trace over blocks of `n` seeds (block = seed // n).
+
+    Only answered charges enter a mean; a block with none has no estimate (NaN).
+    """
+    keys = ["case", "model", "cell", "cycle", "block"]
+    g = preds.assign(block=preds.seed // n).groupby(keys, sort=False)
+    return g.agg(pred=("pred", "mean"), capacity=("capacity", "first"), c0=("c0", "first"), n_answered=("pred", "count")).reset_index()
+
+
+def summarize_avg(preds: pd.DataFrame, n: int = AVG_CHARGES) -> pd.DataFrame:
+    """Per random case and model (main detector): the mean of `n` charges against the
+    single charge, on the charges the model answered. NaN where it answered none."""
+    max_abs = lambda d: float((100.0 * (d.pred - d.capacity) / d.c0).abs().max())  # noqa: E731
+    rows = []
+    for case in CASES:
+        if not case.random:
+            continue
+        if len(case.seeds) % n:
+            raise ValueError(f"{len(case.seeds)} seeds do not split into blocks of {n}")
+        pc = preds[(preds.case == case.name) & (preds.detector == MAIN_DETECTOR)]
+        for model in (m for m, spec in MODELS.items() if spec.cols):
+            single = pc[pc.model == model].assign(block=lambda d: d.seed // n)
+            avg = average_charges(single, n)
+            summ, per_cell = paired(avg, single, key=("block", "cell", "cycle"))
+            row = dict(case=case.name, model=model, n_charges=n, n_blocks=len(case.seeds) // n)
+            if summ["n_common"]:
+                row.update(
+                    rmse_single=summ["rmse_base"], rmse_avg=summ["rmse_model"],
+                    worst_cell_single=per_cell.rmse_base.max(), worst_cell_avg=per_cell.rmse_model.max(),
+                    max_abs_single=max_abs(single), max_abs_avg=max_abs(avg),
+                )
+            rows.append(row)
+    cols = ["case", "model", "n_charges", "n_blocks", "rmse_single", "rmse_avg",
+            "worst_cell_single", "worst_cell_avg", "max_abs_single", "max_abs_avg"]
+    return pd.DataFrame(rows, columns=cols)
+
+
 def main() -> None:
     curves, _ = load()
     log = pd.read_csv(RESULTS / "window_log.csv")
@@ -226,11 +274,27 @@ def main() -> None:
     write_table(pairs, "degraded_paired", "Degraded-log tests: paired comparison", pair_note)
     plots.degraded(summary)
 
+    avg = summarize_avg(preds)
+    avg_note = (
+        f"Mean estimate over {AVG_CHARGES} charges against the single-charge estimate, for the cases with "
+        "random noise or sampling phase (main detector). The 20 seeds of a case are independent logs of "
+        f"the same charge; they are split into blocks of {AVG_CHARGES} and each block's answered estimates "
+        "are averaged, as a BMS could do over consecutive charges. Both sides are scored on the charges "
+        "the model answered; empty where it answered none. worst_cell is the highest per-cell RMSE. "
+        "The 7-of-8-cells rule is not applied: a mean cannot have a higher RMSE than its members, so it "
+        "would pass by construction, and only the size of the gain is informative. Not covered: errors "
+        "that repeat from charge to charge (a constant offset), and the dataset has no consecutive "
+        "charges, so the repeats are simulated."
+    )
+    write_table(avg, "degraded_avg", f"Degraded-log tests: mean of {AVG_CHARGES} charges", avg_note)
+
     cols = ["detector", "case", "model", "rmse", "rmse_seed_min", "rmse_seed_max", "max_abs", "answer_rate", "coverage95", "coverage95_cal"]
     print(summary[cols].to_string(index=False, float_format=lambda x: f"{x:.3f}"))
     print()
     pcols = ["case", "model", "base", "n_common", "rmse_base", "rmse_model", "cells_model_better", "seeds_helps", "verdict"]
     print(pairs[pcols].to_string(index=False, float_format=lambda x: f"{x:.3f}"))
+    print()
+    print(avg.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
 
 
 if __name__ == "__main__":
