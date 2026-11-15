@@ -9,8 +9,8 @@ detector (arming band, time-below-level crossings, sample-gap check) with every 
 counted by reason, a time-based ΔQ feature, incremental-capacity (IC) peak
 features, and six models under nested leave-one-cell-out validation: M0 mean,
 M1 linear(ΔQ), M2 linear(ΔQ + IC peak), M3 GPR(ΔQ), M4 GPR(ΔQ + IC peak), M5
-GPR(ΔQ of each half of the window). Each
-model picks its voltage window inside each outer fold using only the 7 training
+GPR(ΔQ of each half of the window), and a streaming C version of M1 checked
+against Python. Each model picks its voltage window inside each outer fold using only the 7 training
 cells. Tables are in `results/clean_nested.md` (pooled, with GPR 95 % coverage and
 interval width, raw and calibrated), `results/clean_nested_per_cell.md`, `results/window_log.md` and
 `results/paired.md` (each model vs its control on commonly answered traces, with
@@ -72,6 +72,20 @@ findings so far:
   logging (M4 0.66, then no answer). Like every ΔQ model it is offset-sensitive
   (0.93-1.03 at ±5 mV, where the IC models stay at 0.30-0.56).
 
+C estimator (`c/`): a streaming M1 in C99, double precision, no heap; it keeps two
+time-below accumulators and the previous sample. The deployable model is frozen by
+`python -m soh.freeze` with the same window rule, now over all 8 cells. It picks
+3.8-4.0 V (selection score 0.575 SOH points, against 0.578 for 3.5-3.9 V and
+3.8-4.1 V, so the top three are nearly tied), then fits M1 on all 8 cells:
+C [mAh] = 91.93 + 1.987 · ΔQ [mAh] (`results/frozen.md`). The exact coefficients
+go into the generated `c/soh_model.h`. The selection score is computed on the cells
+that chose the window, so the accuracy to quote is still the nested one above.
+`build/replay` streams exported traces through the C code: on all 519 clean traces
+and on seed 0 of the combined degraded case it returns the same reason codes as the
+Python reference and SOH within 1e-14 (gate 1e-4), see `results/c_agreement.md`.
+`make test` also checks the C code against the Python detector on synthetic traces
+(noise, 1 mV quantization, gaps, dips, every reason code) without the dataset.
+
 `make reproduce` takes 10-40 minutes on an 8-core laptop, depending on load; nearly all of it
 is about 1,450 GPR fits in the validation, run in parallel.
 
@@ -85,12 +99,14 @@ committed. The loader checks its SHA-256.
 
 ## Reproduce
 
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.11.
+Requires [uv](https://docs.astral.sh/uv/), Python 3.11 and a C99 compiler.
 
 ```bash
 make reproduce
 ```
 
 This creates `.venv` from the pinned `requirements.txt`, runs the tests, runs the
-data audit (`results/audit.md`, `results/capacity_fade.png`) and writes the
-validation tables to `results/`.
+data audit (`results/audit.md`, `results/capacity_fade.png`), writes the
+validation and degraded-log tables to `results/`, freezes M1 into `c/soh_model.h`,
+builds `build/replay` and checks it against the Python reference. `make agree` runs
+only the last three steps.
