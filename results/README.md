@@ -54,6 +54,11 @@ Each model is also run with its window restricted to one width (RMSE, nested):
   IC settings were frozen before the first run, so this is reported rather than tuned
   away.
 - **M5 is unstable at 300 mV:** one cell misses by up to 18 points (M6: under 2).
+- **Four segments were screened and not added.** In a fixed-window leave-one-cell-out
+  check (not nested, not part of `make reproduce`), M6 with the window split into four
+  segments had a lower RMSE than M6 at all four windows tried (0.30-0.42 against
+  0.36-0.55) but a larger worst miss at three of them (at 3.6-4.0 V: 3.3 points against
+  1.9), and beat M6 on 7 of 8 cells at only one window.
 
 ### Paired comparisons
 
