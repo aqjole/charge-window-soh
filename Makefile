@@ -48,4 +48,4 @@ agree: freeze export
 reproduce: test audit validate degrade agree
 
 clean:
-	rm -rf results/*.png results/*.csv results/*.md build
+	rm -rf results/*.png results/*.csv $(filter-out results/README.md,$(wildcard results/*.md)) build

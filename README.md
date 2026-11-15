@@ -1,112 +1,208 @@
-# Partial-charge SOH estimation (Oxford Battery Degradation Dataset 1)
+# Partial-charge SOH estimation
 
-How much accuracy do incremental-capacity (IC) features add over a simple streaming
-ΔQ estimator for battery state of health, and does the gain survive noisy, sparse
-voltage logs like a real BMS produces?
+**Question.** A BMS sees part of a constant-current charge as voltage against time.
+How much does incremental-capacity (IC) analysis add to battery state-of-health (SOH)
+estimation over a simple charge-counting (ΔQ) estimator, and does that gain survive
+noisy, sparse voltage logs like a real BMS produces?
 
-Work in progress. Current state: data loader with audit, a streaming-style window
-detector (arming band, time-below-level crossings, sample-gap check) with every "no estimate"
-counted by reason, a time-based ΔQ feature, incremental-capacity (IC) peak
-features, and six models under nested leave-one-cell-out validation: M0 mean,
-M1 linear(ΔQ), M2 linear(ΔQ + IC peak), M3 GPR(ΔQ), M4 GPR(ΔQ + IC peak), M5
-GPR(ΔQ of each half of the window), and a streaming C version of M1 checked
-against Python. Each model picks its voltage window inside each outer fold using only the 7 training
-cells. Tables are in `results/clean_nested.md` (pooled, with GPR 95 % coverage and
-interval width, raw and calibrated), `results/clean_nested_per_cell.md`, `results/window_log.md` and
-`results/paired.md` (each model vs its control on commonly answered traces, with
-the decision rule: M2 vs M1 and M4 vs M3 for the IC peak, M5 vs M3 for the split). `results/predictions_gpr.png` shows the held-out GPR errors with
-their calibrated 95 % bands.
+**Short answer.** On clean lab logs, IC helps: the IC peak cuts the linear model's
+error by a quarter, and the best model reaches 0.31 SOH points. On BMS-like logs the
+gain is fragile. From 5 mV of voltage noise, the IC models do worse than plain ΔQ;
+the GPR IC model also loses its edge at 30 s logging, and at 60 s neither IC model
+gives an estimate at all. The most robust model is ΔQ with Gaussian-process
+regression: 0.45-0.64 SOH points across noise, ADC quantization and sparse logging.
+Its weak spot is a constant voltage-sensor offset: ±5 mV doubles its error.
 
-Known limitation of the IC features: settings (5 mV bins, Savitzky-Golay 7 bins,
-order 2) were frozen before the first run with IC. For windows starting at 3.8 V,
-early-life traces lose their IC estimate partly because the dQ/dV peak (~3.82 V)
-sits within the smoothing half-width of the window edge. As a result the IC models
-have no 100 mV window that answers 95 % of traces; that row is reported as not
-available.
+Data: Oxford Battery Degradation Dataset 1, 8 cells, 519 charge curves. Every
+accuracy number below is from nested leave-one-cell-out validation. A streaming C
+version of the simplest estimator matches the Python reference to 1e-14.
 
-Two-segment ΔQ (M5): the window is split at its midpoint voltage and the GPR gets
-both halves' ΔQ, a coarse view of curve shape that needs no differentiation. Clean
-RMSE 0.41 SOH points against 0.45 for M3 and 0.31 for M4; better than M3 on 6 of
-8 cells, short of the 7-of-8 rule, so no detectable gain. At 300 mV width it is
-unstable (one cell misses by up to 18 points). Its value shows in the degraded logs.
+## Main results
 
-GPR intervals: the raw 95 % intervals cover 87 % (M3), 92 % (M4) and 92 % (M5)
-of held-out measurements, because they reflect noise within the training cells,
-not the spread between cells. Each fold therefore also reports calibrated
-intervals: the std is scaled by k, the 95th percentile of |error| / std on the
-inner held-out cells (training cells only) divided by 1.96; k is 1.06-1.57. This
-reuses the inner fits and lifts pooled coverage to 91 % (M3), 95 % (M4) and 97 %
-(M5), at 1.1-1.9 SOH points mean width. It fixes the average, not single cells
-whose error drifts with age: cell 7 stays at 68 % (M3) and 77 % (M4), cell 4 at
-72 % (M3). `results/predictions_gpr.png` shows the calibrated bands.
+Error unit: **SOH points**, i.e. 100 · (estimated − measured capacity) / beginning-of-life
+capacity. Each model picks its own voltage window inside every validation fold.
 
-Window detector: the window starts and ends where the time spent below V1 and below
-V2 says it does (time-below-level), not at the first sample that crosses each level.
-On a clean, rising trace the two are identical. With noise, a first-crossing rule
-fires early by roughly sigma / (dV/dt), worst where the charge curve is flat
-(3.8-3.9 V); time-below-level averages the repeated crossings instead. It needs two
-running sums and no sample buffer, so it suits a streaming C estimator.
+### Clean logs
 
-Degraded-log tests (`results/degraded.md`, `results/degraded_paired.md`,
-`results/degraded.png`): each outer fold's frozen model is applied to copies of its
-held-out cell with voltage noise, offset, ADC quantization or a longer sample period.
-Each case also runs with the old first-crossing detector as a baseline. Main
-findings so far:
+| Model | Inputs | RMSE | Worst cell | Max error | Window (median) | 95 % interval covers |
+|---|---|---:|---:|---:|---:|---:|
+| M0 | none (training mean) | 6.77 | 7.92 | 24.4 | | |
+| M1 | ΔQ, linear | 0.67 | 1.15 | 7.5 | 25 min | |
+| M2 | ΔQ + IC peak, linear | 0.51 | 1.10 | 7.1 | 34 min | |
+| M3 | ΔQ, GPR | 0.45 | 0.65 | 3.6 | 26 min | 91 % |
+| M4 | ΔQ + IC peak, GPR | **0.31** | **0.44** | **2.1** | 34 min | 95 % |
+| M5 | ΔQ of each window half, GPR | 0.41 | 0.84 | 5.0 | 32 min | 97 % |
 
-- With time-below-level, noise barely moves the ΔQ models: M1 goes 0.67 -> 0.69
-  SOH points at 2 mV and 0.84 at 10 mV (first-crossing: 1.15 and 4.26). M3 stays
-  at 0.46-0.54.
-- The IC peak itself is noise-sensitive, so the IC models now degrade faster than
-  their ΔQ partners. IC no longer helps under 5 mV noise or more, and the GPR IC
-  model (M4) shows no detectable gain over M3 at any noise level.
-- A constant voltage offset shifts the levels themselves; no detector can remove it.
-  It is now the main weakness of the ΔQ models (M1 0.67 -> 1.36-1.41 at ±5 mV).
-- A longer sample period does not hurt ΔQ, but it starves the IC features: at 60 s
-  every trace is IC_SPARSE and M2/M4 give no estimate.
-- GPR coverage holds for M3 under noise (87 % clean, 86 % at 5 mV) but falls for
-  M4 (92 % clean, 42 % at 5 mV). Calibration, set on clean data, does not repair
-  this: calibrated M4 covers 49 % at 5 mV, and M3 and M5 drop to 53-66 %
-  under a ±5 mV offset.
-- M5 keeps part of what curve shape adds where the IC peak breaks down: 0.47 at
-  5 mV noise (M4 1.04), 0.57 at a 5 mV ADC step (M4 0.78), 0.41-0.42 at 30-60 s
-  logging (M4 0.66, then no answer). Like every ΔQ model it is offset-sensitive
-  (0.93-1.03 at ±5 mV, where the IC models stay at 0.30-0.56).
+RMSE is pooled over all held-out traces. Worst cell is the highest single-cell RMSE.
+Window is the median time the selected window takes at 1C. Coverage uses calibrated
+GPR intervals. The decision rule, fixed in advance, counts an addition as a gain only
+if it beats its control on at least 7 of 8 held-out cells:
 
-C estimator (`c/`): a streaming M1 in C99, double precision, no heap; it keeps two
-time-below accumulators and the previous sample. The deployable model is frozen by
-`python -m soh.freeze` with the same window rule, now over all 8 cells. It picks
-3.8-4.0 V (selection score 0.575 SOH points, against 0.578 for 3.5-3.9 V and
-3.8-4.1 V, so the top three are nearly tied), then fits M1 on all 8 cells:
-C [mAh] = 91.93 + 1.987 · ΔQ [mAh] (`results/frozen.md`). The exact coefficients
-go into the generated `c/soh_model.h`. The selection score is computed on the cells
-that chose the window, so the accuracy to quote is still the nested one above.
-`build/replay` streams exported traces through the C code: on all 519 clean traces
-and on seed 0 of the combined degraded case it returns the same reason codes as the
-Python reference and SOH within 1e-14 (gate 1e-4), see `results/c_agreement.md`.
-`make test` also checks the C code against the Python detector on synthetic traces
-(noise, 1 mV quantization, gaps, dips, every reason code) without the dataset.
+- **IC peak, linear (M2 vs M1):** helps, better on 8 of 8 cells.
+- **IC peak, GPR (M4 vs M3):** better on 6 of 8, so no detectable gain when each
+  model picks its window freely. At an equal 200 or 300 mV width it passes (7 and 8 of 8).
+- **Two segments (M5 vs M3):** better on 6 of 8, so no detectable gain.
 
-`make reproduce` takes 10-40 minutes on an 8-core laptop, depending on load; nearly all of it
-is about 1,450 GPR fits in the validation, run in parallel.
+### BMS-like logs
 
-## Data
+Each fold's frozen model is applied to degraded copies of its held-out cell, with
+20 random seeds where noise or sampling phase is random. Every model answers 100 % of
+traces unless marked.
 
-Oxford Battery Degradation Dataset 1, DOI
-[10.5287/bodleian:KO2kdmYGg](https://doi.org/10.5287/bodleian:KO2kdmYGg):
-8 Kokam 740 mAh pouch cells cycled at 40 °C, characterized every 100 cycles.
-`make data` downloads the .mat file (about 254 MB) to `data/raw/`; it is not
-committed. The loader checks its SHA-256.
+| Log condition | M1 | M2 | M3 | M4 | M5 |
+|---|---:|---:|---:|---:|---:|
+| Clean | 0.67 | 0.51 | 0.45 | **0.31** | 0.41 |
+| Noise σ = 2 mV | 0.69 | 0.53 | 0.46 | **0.42** | 0.43 |
+| Noise σ = 10 mV | 0.84 | 1.56 | **0.54** | 2.33 | 0.67 |
+| Offset ±5 mV | 1.36-1.41 | 0.54-0.56 | 0.96-0.98 | **0.30-0.35** | 0.93-1.03 |
+| ADC step 5 mV | 0.92 | **0.53** | 0.64 | 0.78 | 0.57 |
+| One sample per 30 s | 0.67 | 0.57 | 0.45 | 0.66 | **0.41** |
+| One sample per 60 s | 0.67 | no answer | 0.45 | no answer | **0.42** |
+| Combined: 2 mV noise, 1 mV ADC step, 10 s | 0.84 | 0.63 | **0.55** | 0.81 | 0.59 |
+
+![RMSE per degradation level](results/degraded.png)
+
+What the table shows:
+
+- **The IC peak is the noise-sensitive part.** It comes from a numerical derivative,
+  so noise and coarse sampling hit the IC models first. At 60 s logging the window
+  has too few samples for an IC curve at all.
+- **ΔQ is a time measurement and barely notices noise or sparse logging** once the
+  window detector averages repeated level crossings (see Method). With the
+  first-crossing rule used earlier, M1 reached 4.26 at 10 mV noise; now it is 0.84.
+- **A constant voltage offset is the one thing ΔQ cannot absorb.** It moves the
+  window levels themselves. The IC models are nearly immune; the measured peak
+  voltage moves with the offset, which likely lets them correct for it.
+- **Calibrated intervals hold on clean data but not off it.** Calibrated M3 and M5
+  intervals cover only 53-66 % under a ±5 mV offset; M4 covers 49 % at 5 mV noise.
+
+Per-cell tables, the window-width trade-off, interval calibration and every
+degraded case are in [`results/`](results/README.md).
+
+## Method
+
+![Charge curves and IC curves with selected windows](results/charge_curves_window.png)
+
+**Data.** [Oxford Battery Degradation Dataset 1](https://doi.org/10.5287/bodleian:KO2kdmYGg):
+8 Kokam 740 mAh pouch cells cycled at 40 °C, with a 1C characterization every 100
+cycles, giving 519 charge curves. The estimator sees only voltage and time of the
+1C constant-current charge (current is taken as the nominal 740 mA). The label is the
+capacity of the paired 1C discharge. SOH is that capacity over the cell's first
+capacity, which a BMS would store at beginning of life. The loader checks the file
+hash and five audit gates first ([`results/audit.md`](results/audit.md)).
+
+**Window and features.** A window [V1, V2] is a voltage band on the charge curve.
+The grid has V1 from 3.5 to 3.9 V and widths of 100-400 mV, with V2 at most 4.15 V,
+giving 17 windows.
+
+- *Window detector:* time-below-level. Between arming (below V1 − 10 mV) and done
+  (above V2 + 30 mV), it accumulates how long the voltage spends below V1 and below
+  V2. On a clean trace this equals the interpolated crossing times. With noise,
+  repeated crossings average out instead of the first one winning. It needs two
+  running sums and no buffer.
+- *ΔQ* = 740 mA × (time between the two levels).
+- *IC peak:* height and voltage of the dQ/dV maximum inside the window (5 mV bins,
+  Savitzky-Golay 7 points, order 2). These settings were frozen before the first
+  run that used them.
+- *Two segments:* ΔQ of each half of the window, split at the midpoint voltage.
+- *No estimate:* a trace that never arms, never completes, has a gap over 120 s
+  or gives no usable IC peak counts as unanswered, by reason. It is never dropped.
+
+**Models.** M0-M5 as in the table. GPR uses a Matérn 5/2 kernel with one length
+scale per input plus a white-noise term, on standardized inputs, with fixed seeds.
+
+**Validation.** Nested leave-one-cell-out:
+
+- *Outer loop:* each cell is held out once.
+- *Inner loop:* inside each fold, every model picks its window by a second
+  leave-one-cell-out on the 7 training cells. The score is mean per-cell RMSE, a
+  window must answer at least 95 % of traces, and ties go to the narrower window.
+  The held-out cell is never used for any choice.
+- *Comparisons:* paired on the traces both models answered, with the 7-of-8-cells
+  rule above (one-sided sign test, p = 0.035).
+- *GPR intervals:* calibrated per fold from the inner held-out errors, so the
+  calibration also uses training cells only.
+
+**BMS-like logs.** Each fold's frozen model sees degraded copies of its held-out
+cell. Degradation is applied in logger order: decimate (sample-and-hold, random
+phase), add offset and Gaussian noise, round to the ADC step. Then detection and
+features run as usual.
+
+## C estimator
+
+`c/soh_est.c` is a streaming M1 in C99, double precision, with no heap and no
+sample buffer:
+
+```c
+soh_est e;
+soh_est_init(&e, &cfg);                /* window, coefficients, C0 */
+for (...) soh_est_feed(&e, t_s, v_mV); /* SOH_RUNNING until the window completes */
+if (soh_est_finish(&e) == SOH_OK) use(e.soh);
+else report(e.status);                 /* NOT_ARMED, NO_V2 or GAP */
+```
+
+The shipped model is frozen by the same window rule over all 8 cells. It picks
+3.8-4.0 V and fits capacity = 91.93 + 1.987 · ΔQ [mAh] on all cells; the generated
+coefficients are in [`c/soh_model.h`](c/soh_model.h). Its expected accuracy is the
+nested M1 result above, not a score on the cells it was fit to. The top three windows
+were nearly tied (0.575 vs 0.578), see [`results/frozen.md`](results/frozen.md).
+
+`build/replay` streams exported traces through the C code. On all 519 clean traces
+and on seed 0 of the combined degraded case, it returns the same reason code as Python for
+every trace and SOH within 1e-14 (gate 1e-4,
+[`results/c_agreement.md`](results/c_agreement.md)). Unit tests also check it
+against Python on synthetic traces that exercise every reason code.
+
+## Limitations
+
+- **One cell type, one temperature, one charge protocol.** 8 cells at 40 °C, a clean
+  1C constant-current charge from empty. No claim beyond that.
+- **Exploratory use of the 8 cells.** The detector change, M5 and interval
+  calibration were added after earlier results on the same 8 cells. The
+  nested validation keeps each number honest, but the choice of which models to
+  report was not blind. A new dataset would be needed for a generalization claim.
+- **Two cells drop abruptly near end of life** (cells 2 and 5, see
+  [`results/capacity_fade.png`](results/capacity_fade.png)). They cause the largest
+  errors of every model.
+- **Sensor errors not covered.** Current is assumed constant and known; a current-gain
+  error passes one-to-one into ΔQ and is not tested. Voltage offset is tested and is
+  the main weakness of the ΔQ models.
+- **Beginning-of-life capacity must be stored** per cell to turn capacity into SOH.
+- **Bench and offline only.** The C code is double precision and has not been
+  ported to a microcontroller.
+
+## Related work
+
+Richardson, Birkl, Osborne and Howey, *Battery capacity estimation from
+partial-charging data using Gaussian process regression*, ASME Dynamic Systems and
+Control Conference 2017 (DSCC2017-5365), use the same 519 curves. They regress
+capacity with a GP on the times to reach four equally spaced voltages inside a
+measured segment, with leave-one-cell-out validation. They report capacity RMSE in
+percent: 2.10 % with 10 s of data and 1.10 % with 450 s (both starting at 3.5 V),
+and 0.49 % with 1,450 s starting at 3.7 V.
+
+These are not directly comparable with the numbers here. Their label is capacity
+from integrating the charge curve. The quoted figures are single entries of a grid
+of results over start voltage and duration, not windows chosen inside each fold.
+And the logs are clean. For scale, M3 with a
+window of about 26 min (1,570 s) reaches 0.45 SOH points.
 
 ## Reproduce
 
 Requires [uv](https://docs.astral.sh/uv/), Python 3.11 and a C99 compiler.
 
 ```bash
-make reproduce
+make data        # downloads the dataset (about 254 MB) to data/raw/, checked by SHA-256
+make reproduce   # tests, audit, validation, degraded logs, frozen model, C agreement
 ```
 
-This creates `.venv` from the pinned `requirements.txt`, runs the tests, runs the
-data audit (`results/audit.md`, `results/capacity_fade.png`), writes the
-validation and degraded-log tables to `results/`, freezes M1 into `c/soh_model.h`,
-builds `build/replay` and checks it against the Python reference. `make agree` runs
-only the last three steps.
+`make reproduce` takes roughly 10-50 minutes on an 8-core laptop, almost all of it
+GPR fits. Results are deterministic: afterwards `git diff results/*.csv` is empty.
+`make test` alone needs no dataset.
+
+| Path | Contents |
+|---|---|
+| `src/soh/` | `load` (audit), `features` (detector, IC), `models`, `validate` (nested), `degrade`, `freeze`, `export`, `agree` |
+| `c/` | streaming estimator, generated model header, replay tool |
+| `tests/` | synthetic-trace tests for the detector, IC, validation rules, degradation and C code |
+| `results/` | every table (CSV and Markdown) and plot; guide in [`results/README.md`](results/README.md) |
