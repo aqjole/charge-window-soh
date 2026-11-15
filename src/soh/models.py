@@ -13,6 +13,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 IC_COLS = ("ic_peak_h", "ic_peak_v")
+SEGMENT_COLS = ("dq_a", "dq_b")  # dq split at the window midpoint; dq_a + dq_b = dq
 GPR_RESTARTS = 2
 GPR_SEED = 0
 
@@ -51,7 +52,12 @@ MODELS = {
     "M2": Spec(("dq", *IC_COLS), LinearRegression, needs_ic=True),
     "M3": Spec(("dq",), gpr(1), has_std=True),
     "M4": Spec(("dq", *IC_COLS), gpr(3), needs_ic=True, has_std=True),
+    "M5": Spec(SEGMENT_COLS, gpr(2), has_std=True),
 }
 
-# (IC model, its no-IC control) for paired comparisons
-PAIRS = (("M2", "M1"), ("M4", "M3"))
+# (model, its control, what the model adds) for paired comparisons
+PAIRS = (
+    ("M2", "M1", "IC peak"),
+    ("M4", "M3", "IC peak"),
+    ("M5", "M3", "two segments"),
+)

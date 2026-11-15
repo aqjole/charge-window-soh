@@ -16,6 +16,9 @@ Window detector, time-below-level (same rules as the C estimator):
   (about sigma / (dV/dt) per level).
 - NO_V2 if the trace never reaches V2 + END_BAND_V. GAP if a segment that
   contributes window time is longer than MAX_GAP_S.
+- The same accumulation at the midpoint level Vm = (V1 + V2) / 2 gives tm, which
+  splits the window into two segments: dq_a = I (tm - t1), dq_b = I (t2 - tm), and
+  dq_a + dq_b = dq (used by M5 only).
 
 `detect_first_crossing` is the rule used up to commit 6. It is kept only as the
 baseline in the degraded-log comparison.
@@ -71,10 +74,22 @@ class Window:
     t2: float = float("nan")
     k1: int = -1  # first sample index at or after t1
     k2: int = -1  # first sample index at or after t2
+    tm: float = float("nan")  # time at the midpoint level (V1 + V2) / 2
+    current_ma: float = NOMINAL_CURRENT_MA
 
     @property
     def ok(self) -> bool:
         return self.reason is Reason.OK
+
+    @property
+    def dq_a(self) -> float:
+        """Charge from V1 to the midpoint level [mAh]."""
+        return self.current_ma * (self.tm - self.t1) / 3600.0
+
+    @property
+    def dq_b(self) -> float:
+        """Charge from the midpoint level to V2 [mAh]."""
+        return self.current_ma * (self.t2 - self.tm) / 3600.0
 
 
 def crossing_time(t: np.ndarray, v: np.ndarray, level: float, start: int = 0) -> tuple[float, int]:
@@ -126,10 +141,11 @@ def detect_window(
     if (np.diff(ts)[below2 - below1 > 0] > max_gap_s).any():
         return Window(Reason.GAP)
     t1, t2 = float(ts[0] + below1.sum()), float(ts[0] + below2.sum())
+    tm = float(ts[0] + time_below(ts, vs, (v1 + v2) / 2).sum())
     duration = t2 - t1
     eps = 1e-9  # a level met exactly on a sample belongs to the window
     k1, k2 = int(np.searchsorted(t, t1 - eps)), int(np.searchsorted(t, t2 - eps))
-    return Window(Reason.OK, current_ma * duration / 3600.0, duration, t1, t2, k1, k2)
+    return Window(Reason.OK, current_ma * duration / 3600.0, duration, t1, t2, k1, k2, tm, current_ma)
 
 
 def detect_first_crossing(
@@ -153,8 +169,9 @@ def detect_first_crossing(
         return Window(Reason.NO_V2)
     if np.diff(t[k1 - 1 : k2 + 1]).max() > max_gap_s:
         return Window(Reason.GAP)
+    tm, _ = crossing_time(t, v, (v1 + v2) / 2, start=k1)
     duration = t2 - t1
-    return Window(Reason.OK, current_ma * duration / 3600.0, duration, t1, t2, k1, k2)
+    return Window(Reason.OK, current_ma * duration / 3600.0, duration, t1, t2, k1, k2, tm, current_ma)
 
 
 @dataclass(frozen=True)

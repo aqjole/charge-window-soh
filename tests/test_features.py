@@ -127,6 +127,32 @@ def test_equals_first_crossing_on_monotone_traces():
     assert a.dq == pytest.approx(b.dq)
 
 
+def test_segments_split_at_midpoint_and_sum_to_dq():
+    # 1 mV/s from 3.0 V: V1 at 600 s, midpoint 3.8 V at 800 s, V2 at 1000 s.
+    t, v = linear_trace(dt=7.0)
+    for detector in (detect_window, detect_first_crossing):
+        w = detector(t, v, V1, V2, current_ma=I_MA)
+        assert w.tm == pytest.approx(800.0)
+        assert w.dq_a == pytest.approx(I_MA * 200 / 3600)
+        assert w.dq_a + w.dq_b == pytest.approx(w.dq)
+
+
+def test_segments_follow_curve_shape():
+    # Slow below the midpoint, fast above: same dq can hide a different split.
+    t = np.arange(0.0, 2000.0, 1.0)
+    v = np.where(t <= 900, 3.5 + 0.0005 * t, 3.95 + 0.002 * (t - 900))  # 3.8 V at 600 s
+    w = detect_window(t, v, V1, V2, current_ma=I_MA)
+    assert (w.t1, w.tm, w.t2) == (pytest.approx(200.0), pytest.approx(600.0), pytest.approx(925.0))
+    assert w.dq_a > w.dq_b
+
+
+def test_failed_window_has_no_segments():
+    t, v = linear_trace(v_end=3.9)
+    w = detect_window(t, v, V1, V2)
+    assert w.reason is Reason.NO_V2
+    assert np.isnan(w.dq_a) and np.isnan(w.dq_b)
+
+
 def test_noise_does_not_bias_the_window():
     # 0.1 mV/s, like the flat part of the charge curve; 5 mV noise.
     rng = np.random.default_rng(0)

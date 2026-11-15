@@ -45,7 +45,8 @@ WIDTHS_MV = (100, 200, 300, 400)
 CUTOFF_MARGIN_V = 0.050
 MIN_ANSWER_RATE = 0.95
 REGIMES = ("any",) + tuple(f"w{w}" for w in WIDTHS_MV)
-IC_HELPS_MIN_CELLS = 7  # decision rule: IC model better in >= 7 of 8 held-out cells
+HELPS_MIN_CELLS = 7  # decision rule: model better than its control in >= 7 of 8 held-out cells
+HELPS = "helps"
 Z95 = 1.959964  # two-sided 95 % normal quantile
 
 
@@ -75,26 +76,28 @@ def window_grid(cutoff_v: float) -> list[Win]:
     ]
 
 
+def feature_row(c: Curve, t: np.ndarray, v: np.ndarray, win: Win, detector=detect_window) -> dict:
+    """Features of one trace (t, v) of curve `c` at window `win`."""
+    w = detector(t, v, win.v1, win.v2)
+    ic = ic_features(t, v, w, win.v1, win.v2)
+    return dict(
+        cell=c.cell,
+        cycle=c.cycle,
+        reason=w.reason.value,
+        ic_reason=ic.reason.value,
+        dq=w.dq,
+        dq_a=w.dq_a,
+        dq_b=w.dq_b,
+        ic_peak_h=ic.peak_h,
+        ic_peak_v=ic.peak_v,
+        duration_s=w.duration_s,
+        capacity=c.capacity_mah,
+        c0=c.c0_mah,
+    )
+
+
 def feature_table(curves: list[Curve], win: Win, detector=detect_window) -> pd.DataFrame:
-    rows = []
-    for c in curves:
-        w = detector(c.t, c.v, win.v1, win.v2)
-        ic = ic_features(c.t, c.v, w, win.v1, win.v2)
-        rows.append(
-            dict(
-                cell=c.cell,
-                cycle=c.cycle,
-                reason=w.reason.value,
-                ic_reason=ic.reason.value,
-                dq=w.dq,
-                ic_peak_h=ic.peak_h,
-                ic_peak_v=ic.peak_v,
-                duration_s=w.duration_s,
-                capacity=c.capacity_mah,
-                c0=c.c0_mah,
-            )
-        )
-    return pd.DataFrame(rows)
+    return pd.DataFrame([feature_row(c, c.t, c.v, win, detector) for c in curves])
 
 
 def model_reason(df: pd.DataFrame, model: str) -> pd.Series:
@@ -312,37 +315,38 @@ def sign_test_p(k: int, n: int) -> float:
     return sum(comb(n, j) for j in range(k, n + 1)) / 2**n
 
 
-def paired(pred_ic: pd.DataFrame, pred_base: pd.DataFrame, key=("cell", "cycle")) -> tuple[dict, pd.DataFrame]:
-    """Compare two models on the traces both answered (each at its own selected window).
+def paired(pred_model: pd.DataFrame, pred_base: pd.DataFrame, key=("cell", "cycle")) -> tuple[dict, pd.DataFrame]:
+    """Compare a model with its control on the traces both answered (each at its own
+    selected window).
 
     `key` identifies a trace; it must include `cell` (the decision rule counts cells).
     """
     key = list(key)
-    a = pred_ic[key + ["pred", "capacity", "c0"]].rename(columns={"pred": "pred_ic"})
+    a = pred_model[key + ["pred", "capacity", "c0"]].rename(columns={"pred": "pred_model"})
     b = pred_base[key + ["pred"]].rename(columns={"pred": "pred_base"})
-    m = a.merge(b, on=key).dropna(subset=["pred_ic", "pred_base"])
+    m = a.merge(b, on=key).dropna(subset=["pred_model", "pred_base"])
     if m.empty:
         return dict(n_common=0, verdict="n/a (no commonly answered traces)"), pd.DataFrame()
-    for side in ("ic", "base"):
+    for side in ("model", "base"):
         m[f"err_{side}"] = 100.0 * (m[f"pred_{side}"] - m.capacity) / m.c0
     rmse = lambda e: float(np.sqrt(np.mean(e**2)))  # noqa: E731
     per_cell = (
         m.groupby("cell")
-        .apply(lambda g: pd.Series(dict(n=len(g), rmse_base=rmse(g.err_base), rmse_ic=rmse(g.err_ic))), include_groups=False)
+        .apply(lambda g: pd.Series(dict(n=len(g), rmse_base=rmse(g.err_base), rmse_model=rmse(g.err_model))), include_groups=False)
         .reset_index()
     )
-    per_cell["ic_better"] = per_cell.rmse_ic < per_cell.rmse_base
-    k, n = int(per_cell.ic_better.sum()), len(per_cell)
+    per_cell["model_better"] = per_cell.rmse_model < per_cell.rmse_base
+    k, n = int(per_cell.model_better.sum()), len(per_cell)
     summary = dict(
         n_common=len(m),
         rmse_base=rmse(m.err_base),
-        rmse_ic=rmse(m.err_ic),
+        rmse_model=rmse(m.err_model),
         macro_rmse_base=float(per_cell.rmse_base.mean()),
-        macro_rmse_ic=float(per_cell.rmse_ic.mean()),
-        cells_ic_better=k,
+        macro_rmse_model=float(per_cell.rmse_model.mean()),
+        cells_model_better=k,
         n_cells=n,
         sign_test_p=sign_test_p(k, n),
-        verdict="IC helps" if n == 8 and k >= IC_HELPS_MIN_CELLS else "no detectable gain",
+        verdict=HELPS if n == 8 and k >= HELPS_MIN_CELLS else "no detectable gain",
     )
     return summary, per_cell
 
@@ -365,13 +369,13 @@ def main() -> None:
         preds[name] = pr
 
     pair_rows, pair_cells = [], []
-    for ic_model, base in PAIRS:
+    for model, base, adds in PAIRS:
         for regime in REGIMES:
-            tag = dict(ic_model=ic_model, base_model=base, regime=regime)
-            if preds[ic_model][regime] is None or preds[base][regime] is None:
+            tag = dict(model=model, base=base, adds=adds, regime=regime)
+            if preds[model][regime] is None or preds[base][regime] is None:
                 pair_rows.append({**tag, "verdict": "n/a (no eligible window)"})
                 continue
-            summ, pc = paired(preds[ic_model][regime], preds[base][regime])
+            summ, pc = paired(preds[model][regime], preds[base][regime])
             pair_rows.append({**tag, **summ})
             pair_cells.append(pc.assign(**tag))
 
@@ -383,7 +387,8 @@ def main() -> None:
         "M2. For windows starting at 3.8 V, early-life traces (first 600-800 cycles) give IC_EDGE "
         "partly because of a smoothing edge artifact: their dQ/dV peak (~3.82 V) lies within the "
         "Savitzky-Golay half-width of V1, and edge extrapolation puts the maximum in the first bin. "
-        "GPR models (M3, M4): coverage95 is the share of answered traces whose measured capacity lies "
+        "M5 is GPR on the window's two halves, dq_a (V1 to the midpoint) and dq_b (midpoint to V2). "
+        "GPR models (M3, M4, M5): coverage95 is the share of answered traces whose measured capacity lies "
         "inside the 95 % predictive interval; interval_width is its mean full width in SOH points."
     )
     pooled_df = pd.DataFrame(pooled)
@@ -396,16 +401,17 @@ def main() -> None:
     write_table(log_df[log_cols], "window_log", "Selected window per outer fold", note)
     write_table(pd.concat(scores, ignore_index=True), "inner_scores", "Inner leave-one-cell-out scores", note)
     pair_note = (
-        "Each pair compared on the held-out traces both models answered, each model at its own "
-        f"selected window. Decision rule fixed in advance: IC helps only if the IC model has lower "
-        f"RMSE in at least {IC_HELPS_MIN_CELLS} of 8 held-out cells (one-sided sign test). In regime "
+        "Each model is compared with its control (`adds` names what the model adds) on the held-out "
+        "traces both answered, each model at its own selected window. Decision rule fixed in advance: "
+        f"the addition helps only if the model has lower RMSE than its control in at least "
+        f"{HELPS_MIN_CELLS} of 8 held-out cells (one-sided sign test). In regime "
         "`any` the two models may use different windows, so a gain there can come partly from a longer "
         "window; the `wNNN` rows compare at equal width."
     )
     pair_df = pd.DataFrame(pair_rows)
-    write_table(pair_df, "paired_ic", "Paired comparison: IC model vs control", pair_note)
-    pc_cols = ["ic_model", "base_model", "regime", "cell", "n", "rmse_base", "rmse_ic", "ic_better"]
-    write_table(pd.concat(pair_cells, ignore_index=True)[pc_cols], "paired_ic_per_cell", "Paired comparison per cell", pair_note)
+    write_table(pair_df, "paired", "Paired comparison: model vs control", pair_note)
+    pc_cols = ["model", "base", "adds", "regime", "cell", "n", "rmse_base", "rmse_model", "model_better"]
+    write_table(pd.concat(pair_cells, ignore_index=True)[pc_cols], "paired_per_cell", "Paired comparison per cell", pair_note)
 
     common = log_df[(log_df.regime == "any")].groupby("model").apply(
         lambda g: g.groupby(["v1", "v2"]).size().idxmax(), include_groups=False

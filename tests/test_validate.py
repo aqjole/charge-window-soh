@@ -195,8 +195,8 @@ def test_paired_uses_only_common_traces_and_applies_rule():
     ic.loc[0, "pred"] = np.nan  # unanswered by IC model -> excluded from both
     summ, per_cell = paired(ic, base)
     assert summ["n_common"] == 79
-    assert summ["cells_ic_better"] == 7
-    assert summ["verdict"] == "IC helps"
+    assert summ["cells_model_better"] == 7
+    assert summ["verdict"] == "helps"
     ic.loc[ic.cell == 7, "pred"] = ic.loc[ic.cell == 7, "capacity"] + 20.0
     assert paired(ic, base)[0]["verdict"] == "no detectable gain"
 

@@ -32,11 +32,11 @@ import pandas as pd
 from joblib import Parallel, delayed
 
 from soh import plots
-from soh.features import detect_first_crossing, detect_window, ic_features
+from soh.features import detect_first_crossing, detect_window
 from soh.load import Curve, load
 from soh.models import MODELS, PAIRS
 from soh.report import RESULTS, write_table
-from soh.validate import IC_HELPS_MIN_CELLS, Win, feature_table, fit_model, metrics, paired, predict_rows
+from soh.validate import HELPS, HELPS_MIN_CELLS, Win, feature_row, feature_table, fit_model, metrics, paired, predict_rows
 
 NATIVE_PERIOD_S = 1.0
 SEEDS = tuple(range(20))
@@ -109,15 +109,7 @@ def degraded_features(
     for c in curves:
         t, v = degrade(c.t, c.v, case, trace_rng(seed, c.cell, c.cycle))
         for win in windows_by_cell[c.cell]:
-            w = detector(t, v, win.v1, win.v2)
-            ic = ic_features(t, v, w, win.v1, win.v2)
-            rows.setdefault(win, []).append(
-                dict(
-                    cell=c.cell, cycle=c.cycle, reason=w.reason.value, ic_reason=ic.reason.value,
-                    dq=w.dq, ic_peak_h=ic.peak_h, ic_peak_v=ic.peak_v, duration_s=w.duration_s,
-                    capacity=c.capacity_mah, c0=c.c0_mah,
-                )
-            )
+            rows.setdefault(win, []).append(feature_row(c, t, v, win, detector))
     return {win: pd.DataFrame(r) for win, r in rows.items()}
 
 
@@ -147,8 +139,8 @@ def run_one(curves: list[Curve], case: Case, seed: int, models: dict, detector: 
 
 
 def summarize(preds: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Per detector, case and model: metrics pooled over seeds; paired IC comparisons
-    per case for the main detector."""
+    """Per detector, case and model: metrics pooled over seeds; paired comparisons
+    (model vs control) per case for the main detector."""
     rows, pair_rows = [], []
     for det, case in [(d, c) for d in DETECTORS for c in CASES]:
         pc = preds[(preds.case == case.name) & (preds.detector == det)]
@@ -169,15 +161,13 @@ def summarize(preds: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             )
         if det != MAIN_DETECTOR:
             continue
-        for ic_model, base in PAIRS:
-            a, b = pc[pc.model == ic_model], pc[pc.model == base]
+        for model, base, adds in PAIRS:
+            a, b = pc[pc.model == model], pc[pc.model == base]
             # pooled over seeds: per-cell RMSE over every (seed, trace) both models answered
             summ, _ = paired(a, b, key=("seed", "cell", "cycle"))
-            per_seed = [
-                paired(a[a.seed == s], b[b.seed == s])[0]["verdict"] == "IC helps" for s in sorted(pc.seed.unique())
-            ]
+            per_seed = [paired(a[a.seed == s], b[b.seed == s])[0]["verdict"] == HELPS for s in sorted(pc.seed.unique())]
             pair_rows.append(
-                dict(case=case.name, ic_model=ic_model, base_model=base, **summ, seeds_ic_helps=int(sum(per_seed)), n_seeds=n_seeds)
+                dict(case=case.name, model=model, base=base, adds=adds, **summ, seeds_helps=int(sum(per_seed)), n_seeds=n_seeds)
             )
     return pd.DataFrame(rows), pd.DataFrame(pair_rows)
 
@@ -215,17 +205,17 @@ def main() -> None:
     write_table(summary, "degraded", "Degraded-log tests", note)
     pair_note = (
         "Paired comparison on traces both models answered, pooled over seeds (per-cell RMSE over all "
-        f"seeds' traces). Same decision rule as on clean data: IC helps only if the IC model has lower "
-        f"RMSE in at least {IC_HELPS_MIN_CELLS} of 8 held-out cells. seeds_ic_helps counts the seeds for "
-        "which the rule holds on that seed alone."
+        f"seeds' traces). Same decision rule as on clean data: the addition (`adds`) helps only if the "
+        f"model has lower RMSE than its control in at least {HELPS_MIN_CELLS} of 8 held-out cells. "
+        "seeds_helps counts the seeds for which the rule holds on that seed alone."
     )
-    write_table(pairs, "degraded_paired_ic", "Degraded-log tests: paired IC comparison", pair_note)
+    write_table(pairs, "degraded_paired", "Degraded-log tests: paired comparison", pair_note)
     plots.degraded(summary)
 
     cols = ["detector", "case", "model", "rmse", "rmse_seed_min", "rmse_seed_max", "max_abs", "answer_rate", "coverage95"]
     print(summary[cols].to_string(index=False, float_format=lambda x: f"{x:.3f}"))
     print()
-    pcols = ["case", "ic_model", "base_model", "n_common", "rmse_base", "rmse_ic", "cells_ic_better", "seeds_ic_helps", "verdict"]
+    pcols = ["case", "model", "base", "n_common", "rmse_base", "rmse_model", "cells_model_better", "seeds_helps", "verdict"]
     print(pairs[pcols].to_string(index=False, float_format=lambda x: f"{x:.3f}"))
 
 

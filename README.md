@@ -7,13 +7,14 @@ voltage logs like a real BMS produces?
 Work in progress. Current state: data loader with audit, a streaming-style window
 detector (arming band, time-below-level crossings, sample-gap check) with every "no estimate"
 counted by reason, a time-based ΔQ feature, incremental-capacity (IC) peak
-features, and five models under nested leave-one-cell-out validation: M0 mean,
-M1 linear(ΔQ), M2 linear(ΔQ + IC peak), M3 GPR(ΔQ), M4 GPR(ΔQ + IC peak). Each
+features, and six models under nested leave-one-cell-out validation: M0 mean,
+M1 linear(ΔQ), M2 linear(ΔQ + IC peak), M3 GPR(ΔQ), M4 GPR(ΔQ + IC peak), M5
+GPR(ΔQ of each half of the window). Each
 model picks its voltage window inside each outer fold using only the 7 training
 cells. Tables are in `results/clean_nested.md` (pooled, with GPR 95 % coverage and
 interval width), `results/clean_nested_per_cell.md`, `results/window_log.md` and
-`results/paired_ic.md` (IC model vs its control on commonly answered traces, with
-the decision rule). `results/predictions_gpr.png` shows the held-out GPR errors with
+`results/paired.md` (each model vs its control on commonly answered traces, with
+the decision rule: M2 vs M1 and M4 vs M3 for the IC peak, M5 vs M3 for the split). `results/predictions_gpr.png` shows the held-out GPR errors with
 their 95 % bands.
 
 Known limitation of the IC features: settings (5 mV bins, Savitzky-Golay 7 bins,
@@ -23,8 +24,14 @@ sits within the smoothing half-width of the window edge. As a result the IC mode
 have no 100 mV window that answers 95 % of traces; that row is reported as not
 available.
 
+Two-segment ΔQ (M5): the window is split at its midpoint voltage and the GPR gets
+both halves' ΔQ, a coarse view of curve shape that needs no differentiation. Clean
+RMSE 0.41 SOH points against 0.45 for M3 and 0.31 for M4; better than M3 on 6 of
+8 cells, short of the 7-of-8 rule, so no detectable gain. At 300 mV width it is
+unstable (one cell misses by up to 18 points). Its value shows in the degraded logs.
+
 Known limitation of the GPR intervals: pooled 95 % coverage on held-out cells is
-87 % (M3) and 92 % (M4), below nominal. The shortfall is concentrated in cells 4
+87 % (M3), 92 % (M4) and 92 % (M5), below nominal. The shortfall is concentrated in cells 4
 and 7, whose error drifts with age: the intervals reflect noise within the training
 cells, not the spread between cells.
 
@@ -35,7 +42,7 @@ fires early by roughly sigma / (dV/dt), worst where the charge curve is flat
 (3.8-3.9 V); time-below-level averages the repeated crossings instead. It needs two
 running sums and no sample buffer, so it suits a streaming C estimator.
 
-Degraded-log tests (`results/degraded.md`, `results/degraded_paired_ic.md`,
+Degraded-log tests (`results/degraded.md`, `results/degraded_paired.md`,
 `results/degraded.png`): each outer fold's frozen model is applied to copies of its
 held-out cell with voltage noise, offset, ADC quantization or a longer sample period.
 Each case also runs with the old first-crossing detector as a baseline. Main
@@ -53,9 +60,13 @@ findings so far:
   every trace is IC_SPARSE and M2/M4 give no estimate.
 - GPR coverage holds for M3 under noise (87 % clean, 86 % at 5 mV) but falls for
   M4 (92 % clean, 42 % at 5 mV).
+- M5 keeps part of what curve shape adds where the IC peak breaks down: 0.47 at
+  5 mV noise (M4 1.04), 0.57 at a 5 mV ADC step (M4 0.78), 0.41-0.42 at 30-60 s
+  logging (M4 0.66, then no answer). Like every ΔQ model it is offset-sensitive
+  (0.93-1.03 at ±5 mV, where the IC models stay at 0.30-0.56).
 
-`make reproduce` takes 7-30 minutes on an 8-core laptop, depending on load; nearly all of it is
-about 950 GPR fits in the validation, run in parallel.
+`make reproduce` takes 10-40 minutes on an 8-core laptop, depending on load; nearly all of it
+is about 1,450 GPR fits in the validation, run in parallel.
 
 ## Data
 

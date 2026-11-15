@@ -1,0 +1,16 @@
+model,base,adds,regime,n_common,rmse_base,rmse_model,macro_rmse_base,macro_rmse_model,cells_model_better,n_cells,sign_test_p,verdict
+M2,M1,IC peak,any,519.0000,0.6719,0.5058,0.6774,0.4622,8.0000,8.0000,0.0039,helps
+M2,M1,IC peak,w100,,,,,,,,,n/a (no eligible window)
+M2,M1,IC peak,w200,519.0000,0.5724,0.6763,0.5751,0.6171,5.0000,8.0000,0.3633,no detectable gain
+M2,M1,IC peak,w300,519.0000,0.5812,0.6035,0.5781,0.5449,6.0000,8.0000,0.1445,no detectable gain
+M2,M1,IC peak,w400,519.0000,0.5891,0.5058,0.5780,0.4622,8.0000,8.0000,0.0039,helps
+M4,M3,IC peak,any,519.0000,0.4539,0.3061,0.4282,0.2984,6.0000,8.0000,0.1445,no detectable gain
+M4,M3,IC peak,w100,,,,,,,,,n/a (no eligible window)
+M4,M3,IC peak,w200,519.0000,0.6407,0.3898,0.5765,0.3592,7.0000,8.0000,0.0352,helps
+M4,M3,IC peak,w300,519.0000,0.7215,0.3439,0.7146,0.3263,8.0000,8.0000,0.0039,helps
+M4,M3,IC peak,w400,519.0000,0.4466,0.3061,0.4233,0.2984,6.0000,8.0000,0.1445,no detectable gain
+M5,M3,two segments,any,519.0000,0.4539,0.4075,0.4282,0.3861,6.0000,8.0000,0.1445,no detectable gain
+M5,M3,two segments,w100,519.0000,0.6060,0.6160,0.5506,0.5660,5.0000,8.0000,0.3633,no detectable gain
+M5,M3,two segments,w200,519.0000,0.6407,0.5155,0.5765,0.4901,5.0000,8.0000,0.3633,no detectable gain
+M5,M3,two segments,w300,519.0000,0.7215,0.9491,0.7146,0.7874,6.0000,8.0000,0.1445,no detectable gain
+M5,M3,two segments,w400,519.0000,0.4466,0.3445,0.4233,0.3322,6.0000,8.0000,0.1445,no detectable gain
