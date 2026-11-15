@@ -178,7 +178,7 @@ charge curve is flat. Time-below-level instead averages the repeated crossings.
 | Case | M1, first crossing | M1, time below level | M3, first crossing | M3, time below level |
 |---|---:|---:|---:|---:|
 | Noise 2 mV | 1.15 | 0.69 | 0.75 | 0.46 |
-| Noise 5 mV | 2.44 | 0.71 | 1.74 | 0.48 |
+| Noise 5 mV | 2.43 | 0.71 | 1.74 | 0.48 |
 | Noise 10 mV | 4.26 | 0.84 | 3.76 | 0.54 |
 | Combined | 1.02 | 0.84 | 0.64 | 0.55 |
 

@@ -15,7 +15,9 @@ gives an estimate at all. The most robust model is ΔQ with Gaussian-process
 regression: 0.45-0.64 SOH points across noise, ADC quantization and sparse logging.
 Its weak spot is a constant voltage-sensor offset: ±5 mV doubles its error.
 Training on offset-shifted copies of the logs (M6) halves that, at a cost of 0.02
-points on clean logs.
+points on clean logs. Averaging the estimates of 5 charges removes most of what
+random noise and sampling add (M6 in the combined case: 0.59 to 0.46), but not an
+offset, and not the bias noise puts into the IC peak.
 
 Data: Oxford Battery Degradation Dataset 1, 8 cells, 519 charge curves. Every
 accuracy number below is from nested leave-one-cell-out validation. A streaming C
@@ -177,9 +179,13 @@ against Python on synthetic traces that exercise every reason code.
 - **One cell type, one temperature, one charge protocol.** 8 cells at 40 °C, a clean
   1C constant-current charge from empty. No claim beyond that.
 - **Exploratory use of the 8 cells.** The detector change, M5, interval
-  calibration and M6 were added after earlier results on the same 8 cells. The
-  nested validation keeps each number honest, but the choice of which models to
-  report was not blind. A new dataset would be needed for a generalization claim.
+  calibration, M6 and charge averaging were added after earlier results on the same
+  8 cells. The nested validation keeps each number honest, but the choice of which
+  models to report was not blind. A new dataset would be needed for a generalization
+  claim.
+- **Repeated charges are simulated.** The dataset has one charge per 100 cycles, so
+  the averaged charges are independent noisy logs of the same charge. Real
+  consecutive charges also differ in temperature and starting state.
 - **Two cells have sudden capacity drops** (cells 2 and 5, see
   [`results/capacity_fade.png`](results/capacity_fade.png)). Cell 5 loses 20 SOH
   points at its last check (cycle 5000). Cell 2 dips by 5 points at cycle 5000 and by
