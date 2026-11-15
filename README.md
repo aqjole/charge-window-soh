@@ -1,5 +1,7 @@
 # Partial-charge SOH estimation
 
+[![CI](https://github.com/aqjole/charge-window-soh/actions/workflows/ci.yml/badge.svg)](https://github.com/aqjole/charge-window-soh/actions/workflows/ci.yml)
+
 **Question.** A BMS sees part of a constant-current charge as voltage against time.
 How much does incremental-capacity (IC) analysis add to battery state-of-health (SOH)
 estimation over a simple charge-counting (ΔQ) estimator, and does that gain survive
@@ -198,7 +200,8 @@ make reproduce   # tests, audit, validation, degraded logs, frozen model, C agre
 
 `make reproduce` takes roughly 10-50 minutes on an 8-core laptop, almost all of it
 GPR fits. Results are deterministic: afterwards `git diff results/*.csv` is empty.
-`make test` alone needs no dataset.
+`make test` alone needs no dataset; CI runs it on every push, together with a
+`-Werror` build of the C code with gcc and clang.
 
 | Path | Contents |
 |---|---|

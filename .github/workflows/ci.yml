@@ -1,0 +1,40 @@
+name: CI
+
+# Runs everything that needs no dataset: the synthetic-trace test suite (which also
+# compiles the C estimator and checks it against the Python detector) and a strict
+# C build of the replay tool with gcc and clang. The dataset-backed validation runs
+# locally with `make reproduce`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Tests (Python and C vs Python)
+        run: make test
+
+  c-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build replay (C99, -Werror)
+        run: make c CC=${{ matrix.cc }}
+      - name: Replay smoke test
+        run: |
+          printf 'cell,cycle,c0_mah,t_s,v_mV\n1,0,740,0,3700\n1,0,740,100,3900\n1,0,740,200,4100\n2,0,740,0,3900\n' > smoke.csv
+          build/replay < smoke.csv | tee out.csv
+          grep -q '^1,0,OK,' out.csv
+          grep -q '^2,0,NOT_ARMED,' out.csv
