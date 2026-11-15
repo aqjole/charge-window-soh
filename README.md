@@ -12,10 +12,10 @@ M1 linear(ΔQ), M2 linear(ΔQ + IC peak), M3 GPR(ΔQ), M4 GPR(ΔQ + IC peak), M5
 GPR(ΔQ of each half of the window). Each
 model picks its voltage window inside each outer fold using only the 7 training
 cells. Tables are in `results/clean_nested.md` (pooled, with GPR 95 % coverage and
-interval width), `results/clean_nested_per_cell.md`, `results/window_log.md` and
+interval width, raw and calibrated), `results/clean_nested_per_cell.md`, `results/window_log.md` and
 `results/paired.md` (each model vs its control on commonly answered traces, with
 the decision rule: M2 vs M1 and M4 vs M3 for the IC peak, M5 vs M3 for the split). `results/predictions_gpr.png` shows the held-out GPR errors with
-their 95 % bands.
+their calibrated 95 % bands.
 
 Known limitation of the IC features: settings (5 mV bins, Savitzky-Golay 7 bins,
 order 2) were frozen before the first run with IC. For windows starting at 3.8 V,
@@ -30,10 +30,15 @@ RMSE 0.41 SOH points against 0.45 for M3 and 0.31 for M4; better than M3 on 6 of
 8 cells, short of the 7-of-8 rule, so no detectable gain. At 300 mV width it is
 unstable (one cell misses by up to 18 points). Its value shows in the degraded logs.
 
-Known limitation of the GPR intervals: pooled 95 % coverage on held-out cells is
-87 % (M3), 92 % (M4) and 92 % (M5), below nominal. The shortfall is concentrated in cells 4
-and 7, whose error drifts with age: the intervals reflect noise within the training
-cells, not the spread between cells.
+GPR intervals: the raw 95 % intervals cover 87 % (M3), 92 % (M4) and 92 % (M5)
+of held-out measurements, because they reflect noise within the training cells,
+not the spread between cells. Each fold therefore also reports calibrated
+intervals: the std is scaled by k, the 95th percentile of |error| / std on the
+inner held-out cells (training cells only) divided by 1.96; k is 1.06-1.57. This
+reuses the inner fits and lifts pooled coverage to 91 % (M3), 95 % (M4) and 97 %
+(M5), at 1.1-1.9 SOH points mean width. It fixes the average, not single cells
+whose error drifts with age: cell 7 stays at 68 % (M3) and 77 % (M4), cell 4 at
+72 % (M3). `results/predictions_gpr.png` shows the calibrated bands.
 
 Window detector: the window starts and ends where the time spent below V1 and below
 V2 says it does (time-below-level), not at the first sample that crosses each level.
@@ -59,7 +64,9 @@ findings so far:
 - A longer sample period does not hurt ΔQ, but it starves the IC features: at 60 s
   every trace is IC_SPARSE and M2/M4 give no estimate.
 - GPR coverage holds for M3 under noise (87 % clean, 86 % at 5 mV) but falls for
-  M4 (92 % clean, 42 % at 5 mV).
+  M4 (92 % clean, 42 % at 5 mV). Calibration, set on clean data, does not repair
+  this: calibrated M4 covers 49 % at 5 mV, and M3 and M5 drop to 53-66 %
+  under a ±5 mV offset.
 - M5 keeps part of what curve shape adds where the IC peak breaks down: 0.47 at
   5 mV noise (M4 1.04), 0.57 at a 5 mV ADC step (M4 0.78), 0.41-0.42 at 30-60 s
   logging (M4 0.66, then no answer). Like every ΔQ model it is offset-sensitive

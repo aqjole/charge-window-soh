@@ -10,7 +10,12 @@ own window from a fixed grid by inner leave-one-cell-out on the 7 training cells
   100 mV: that regime is reported as "no eligible window" with the best window's
   answer rate; the rule itself is not relaxed.
 
-The held-out cell is never used for any choice. Width-frontier regimes repeat the
+The held-out cell is never used for any choice.
+
+GPR intervals are also reported calibrated: in each outer fold, k = 95th percentile
+of |error| / std over the inner held-out predictions at the fold's chosen window
+(the inner fits above, on the 7 training cells only), divided by 1.96. The held-out
+cell's std is multiplied by k (`std_cal`). k may be below 1 (narrower intervals). Width-frontier regimes repeat the
 selection with the grid restricted to one width, reusing the cached inner scores.
 
 A model answers a trace only when its features exist (reason OK). Training uses
@@ -48,6 +53,7 @@ REGIMES = ("any",) + tuple(f"w{w}" for w in WIDTHS_MV)
 HELPS_MIN_CELLS = 7  # decision rule: model better than its control in >= 7 of 8 held-out cells
 HELPS = "helps"
 Z95 = 1.959964  # two-sided 95 % normal quantile
+CAL_QUANTILE = 0.95
 
 
 class SelectionError(RuntimeError):
@@ -168,19 +174,30 @@ def metrics(pred: pd.DataFrame) -> dict[str, float]:
         )
     else:
         stats = dict(rmse=np.nan, macro_rmse=np.nan, mae=np.nan, max_abs=np.nan)
-    if "std" in ans and ans["std"].notna().any():
-        half = Z95 * ans["std"]
-        stats["coverage95"] = float(np.mean(np.abs(ans.pred - ans.capacity) <= half))
-        stats["interval_width"] = float(np.mean(100.0 * 2 * half / ans.c0))  # SOH points
+    for sfx in ("", "_cal"):  # raw and calibrated GPR intervals
+        if f"std{sfx}" in ans and ans[f"std{sfx}"].notna().any():
+            half = Z95 * ans[f"std{sfx}"]
+            stats[f"coverage95{sfx}"] = float(np.mean(np.abs(ans.pred - ans.capacity) <= half))
+            stats[f"interval_width{sfx}"] = float(np.mean(100.0 * 2 * half / ans.c0))  # SOH points
     counts = {f"n_{r.value}": int((pred.reason == r.value).sum()) for r in NO_ESTIMATE_REASONS}
     return dict(**stats, n=len(err), n_total=n_total, answer_rate=len(err) / n_total, **counts)
+
+
+def calibration_factor(pred: pd.DataFrame) -> float:
+    """k such that k * std covers CAL_QUANTILE of these answered predictions' errors at
+    +-Z95 * k * std: quantile(|error| / std) / Z95. NaN without answered GPR predictions."""
+    ans = pred[pred.pred.notna() & pred["std"].notna()]
+    if ans.empty:
+        return float("nan")
+    z = np.abs(ans.pred - ans.capacity) / ans["std"]
+    return float(np.quantile(z, CAL_QUANTILE) / Z95)
 
 
 def inner_scores(features: dict[Win, pd.DataFrame], model: str) -> pd.DataFrame:
     """Inner leave-one-cell-out score of every (outer fold, window). Held-out cell excluded.
 
     One fit per (window, cell pair {a, b}) on the other six cells; it predicts a for
-    fold b and b for fold a.
+    fold b and b for fold a. GPR models also get the fold's calibration factor `k95`.
     """
     tasks = []
     for win, df in features.items():
@@ -207,6 +224,7 @@ def inner_scores(features: dict[Win, pd.DataFrame], model: str) -> pd.DataFrame:
                     width_mv=win.width_mv,
                     score=m["macro_rmse"],
                     answer_rate=m["answer_rate"],
+                    k95=calibration_factor(pred) if MODELS[model].has_std else np.nan,
                 )
             )
     return pd.DataFrame(rows)
@@ -229,6 +247,7 @@ def select(scores: pd.DataFrame, regime: str) -> pd.DataFrame:
                 width_mv=int(best.width_mv),
                 inner_score=best.score,
                 inner_answer_rate=best.answer_rate,
+                k95=best.get("k95", np.nan),
                 n_eligible=len(eligible),
                 n_candidates=len(g),
             )
@@ -249,8 +268,11 @@ def outer_fits(features: dict[Win, pd.DataFrame], model: str, keys) -> dict:
 
 
 def outer_predict(fits: dict, chosen: pd.DataFrame) -> pd.DataFrame:
-    """Each held-out cell predicted at its fold's chosen window."""
-    out = [fits[(Win(r.v1, r.v2), r.fold)].assign(v1=r.v1, v2=r.v2) for r in chosen.itertuples()]
+    """Each held-out cell predicted at its fold's chosen window, std calibrated by its k95."""
+    out = [
+        (f := fits[(Win(r.v1, r.v2), r.fold)]).assign(v1=r.v1, v2=r.v2, std_cal=f["std"] * r.k95)
+        for r in chosen.itertuples()
+    ]
     return pd.concat(out, ignore_index=True)
 
 
@@ -389,7 +411,9 @@ def main() -> None:
         "Savitzky-Golay half-width of V1, and edge extrapolation puts the maximum in the first bin. "
         "M5 is GPR on the window's two halves, dq_a (V1 to the midpoint) and dq_b (midpoint to V2). "
         "GPR models (M3, M4, M5): coverage95 is the share of answered traces whose measured capacity lies "
-        "inside the 95 % predictive interval; interval_width is its mean full width in SOH points."
+        "inside the 95 % predictive interval; interval_width is its mean full width in SOH points. "
+        "The _cal columns use the std multiplied by the fold's k95 (95th percentile of |error| / std "
+        "over the inner held-out predictions at the chosen window, training cells only, / 1.96)."
     )
     pooled_df = pd.DataFrame(pooled)
     write_table(pooled_df, "clean_nested", "Clean data, nested validation", note)
@@ -397,7 +421,7 @@ def main() -> None:
     write_table(cells_df, "clean_nested_per_cell", "Clean data, nested validation, per cell", note)
     plots.frontier(pooled_df, cells_df)
     log_df = pd.concat(log, ignore_index=True)
-    log_cols = ["model", "regime", "fold", "v1", "v2", "width_mv", "inner_score", "inner_answer_rate", "n_eligible", "n_candidates"]
+    log_cols = ["model", "regime", "fold", "v1", "v2", "width_mv", "inner_score", "inner_answer_rate", "k95", "n_eligible", "n_candidates"]
     write_table(log_df[log_cols], "window_log", "Selected window per outer fold", note)
     write_table(pd.concat(scores, ignore_index=True), "inner_scores", "Inner leave-one-cell-out scores", note)
     pair_note = (
@@ -420,7 +444,7 @@ def main() -> None:
     plots.predictions({m: preds[m]["any"] for m in ("M3", "M4")})
 
     cols = ["model", "regime", "rmse", "macro_rmse", "mae", "max_abs", "answer_rate", "coverage95",
-            "interval_width", "median_window_s", "windows"]
+            "interval_width", "coverage95_cal", "interval_width_cal", "median_window_s", "windows"]
     print(pooled_df[cols].to_string(index=False, float_format=lambda x: f"{x:.3f}"))
     print()
     print(pair_df.to_string(index=False, float_format=lambda x: f"{x:.3f}"))

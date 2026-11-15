@@ -20,6 +20,9 @@ Every case runs twice: with the project's window detector (time-below-level) and
 as a baseline, with the first-crossing rule used up to commit 6. The baseline's
 fold models are refit on clean first-crossing features at the same windows, so the
 two rows differ only in the detector.
+
+Calibrated GPR intervals use each fold's k95 from the clean inner fits (window log),
+for the main detector only.
 """
 
 from __future__ import annotations
@@ -113,8 +116,13 @@ def degraded_features(
     return {win: pd.DataFrame(r) for win, r in rows.items()}
 
 
-def fold_models(curves: list[Curve], log: pd.DataFrame, detector=detect_window) -> dict[tuple[str, int], tuple[Win, object]]:
-    """(model, fold) -> (selected window, model fit on the clean training cells)."""
+def fold_models(
+    curves: list[Curve], log: pd.DataFrame, detector=detect_window, calibrate: bool = True
+) -> dict[tuple[str, int], tuple[Win, object, float]]:
+    """(model, fold) -> (selected window, model fit on the clean training cells, k95).
+
+    k95 is NaN for point models and when `calibrate` is False.
+    """
     chosen = log[log.regime == REGIME]
     wins = {Win(r.v1, r.v2) for r in chosen.itertuples()}
     feats = {w: feature_table(curves, w, detector) for w in wins}
@@ -122,19 +130,21 @@ def fold_models(curves: list[Curve], log: pd.DataFrame, detector=detect_window) 
     out = {}
     for r in chosen.itertuples():
         win = Win(r.v1, r.v2)
-        out[(r.model, int(r.fold))] = (win, fit_model(feats[win], r.model, [c for c in cells if c != r.fold]))
+        k = r.k95 if calibrate else np.nan
+        out[(r.model, int(r.fold))] = (win, fit_model(feats[win], r.model, [c for c in cells if c != r.fold]), k)
     return out
 
 
 def run_one(curves: list[Curve], case: Case, seed: int, models: dict, detector: str = MAIN_DETECTOR) -> pd.DataFrame:
     windows_by_cell: dict[int, set[Win]] = {}
-    for (_, fold), (win, _) in models.items():
+    for (_, fold), (win, _, _) in models.items():
         windows_by_cell.setdefault(fold, set()).add(win)
     feats = degraded_features(curves, case, seed, windows_by_cell, DETECTORS[detector])
     out = []
-    for (model, fold), (win, est) in models.items():
+    for (model, fold), (win, est, k) in models.items():
         df = feats[win]
-        out.append(predict_rows(est, df[df.cell == fold], model).assign(model=model, v1=win.v1, v2=win.v2))
+        p = predict_rows(est, df[df.cell == fold], model)
+        out.append(p.assign(model=model, v1=win.v1, v2=win.v2, std_cal=p["std"] * k))
     return pd.concat(out, ignore_index=True).assign(case=case.name, seed=seed, detector=detector)
 
 
@@ -156,6 +166,7 @@ def summarize(preds: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
                     rmse_seed_min=seed_rmse.min(), rmse_seed_max=seed_rmse.max(),
                     answer_rate=m["answer_rate"],
                     coverage95=m.get("coverage95", np.nan), interval_width=m.get("interval_width", np.nan),
+                    coverage95_cal=m.get("coverage95_cal", np.nan), interval_width_cal=m.get("interval_width_cal", np.nan),
                     **counts,
                 )
             )
@@ -176,7 +187,7 @@ def main() -> None:
     curves, _ = load()
     log = pd.read_csv(RESULTS / "window_log.csv")
     t0 = time.perf_counter()
-    models = {det: fold_models(curves, log, fn) for det, fn in DETECTORS.items()}
+    models = {det: fold_models(curves, log, fn, calibrate=det == MAIN_DETECTOR) for det, fn in DETECTORS.items()}
     tasks = [(det, case, seed) for det in DETECTORS for case in CASES for seed in case.seeds]
     parts = Parallel(n_jobs=-1)(delayed(run_one)(curves, case, seed, models[det], det) for det, case, seed in tasks)
     preds = pd.concat(parts, ignore_index=True)
@@ -186,10 +197,11 @@ def main() -> None:
 
     # Consistency gate: the clean case must reproduce the nested any-width result exactly.
     nested_df = pd.read_csv(RESULTS / "clean_nested.csv")
-    ref = nested_df[nested_df.regime == REGIME].set_index("model").rmse
-    got = summary[(summary.case == "clean") & (summary.detector == MAIN_DETECTOR)].set_index("model").rmse
-    if not np.allclose(got[ref.index], ref, atol=1e-4, equal_nan=True):
-        raise RuntimeError(f"clean case does not match clean_nested:\n{pd.concat([ref, got], axis=1)}")
+    for col in ("rmse", "coverage95_cal"):
+        ref = nested_df[nested_df.regime == REGIME].set_index("model")[col]
+        got = summary[(summary.case == "clean") & (summary.detector == MAIN_DETECTOR)].set_index("model")[col]
+        if not np.allclose(got[ref.index], ref, atol=1e-4, equal_nan=True):
+            raise RuntimeError(f"clean case {col} does not match clean_nested:\n{pd.concat([ref, got], axis=1)}")
 
     note = (
         "Frozen fold models (each outer fold's model at the window it selected in the any-width "
@@ -199,7 +211,9 @@ def main() -> None:
         "rmse_seed_min/max give the spread of per-seed RMSE; n_<REASON> are mean counts per run. "
         "Errors in SOH percentage points on answered traces. detector `time-below` is the project's "
         "window detector; `first-crossing` is the rule used up to commit 6, kept as a baseline "
-        "(fold models refit on its clean features at the same windows). Current-sensor error is not "
+        "(fold models refit on its clean features at the same windows). The _cal columns use GPR "
+        "intervals calibrated with each fold's k95 from the clean inner fits (main detector only). "
+        "Current-sensor error is not "
         "tested: there is no current channel, and a gain error maps one-to-one into dq."
     )
     write_table(summary, "degraded", "Degraded-log tests", note)
@@ -212,7 +226,7 @@ def main() -> None:
     write_table(pairs, "degraded_paired", "Degraded-log tests: paired comparison", pair_note)
     plots.degraded(summary)
 
-    cols = ["detector", "case", "model", "rmse", "rmse_seed_min", "rmse_seed_max", "max_abs", "answer_rate", "coverage95"]
+    cols = ["detector", "case", "model", "rmse", "rmse_seed_min", "rmse_seed_max", "max_abs", "answer_rate", "coverage95", "coverage95_cal"]
     print(summary[cols].to_string(index=False, float_format=lambda x: f"{x:.3f}"))
     print()
     pcols = ["case", "model", "base", "n_common", "rmse_base", "rmse_model", "cells_model_better", "seeds_helps", "verdict"]

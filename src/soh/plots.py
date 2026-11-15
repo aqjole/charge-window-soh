@@ -83,9 +83,10 @@ def charge_curves(curves: list[Curve], windows: dict, cell: int = 1, every: int 
 
 
 def predictions(preds: dict[str, pd.DataFrame], regime: str = "any") -> None:
-    """Held-out error per cell with each probabilistic model's 95 % predictive band.
+    """Held-out error per cell with each probabilistic model's calibrated 95 % band.
 
-    The band covers the measured capacity where it crosses zero.
+    The band covers the measured capacity where it crosses zero. The legend gives the
+    coverage of the calibrated band and, in brackets, of the raw GPR band.
     """
     colors = {"M3": "C0", "M4": "C1"}
     cells = sorted(next(iter(preds.values())).cell.unique())
@@ -96,11 +97,12 @@ def predictions(preds: dict[str, pd.DataFrame], regime: str = "any") -> None:
             g = pred[(pred.cell == cell) & pred.pred.notna()].sort_values("cycle")
             col = colors.get(name, "C3")
             err = 100 * (g.pred - g.capacity) / g.c0
-            half = 100 * Z95 * g["std"] / g.c0
+            half = 100 * Z95 * g["std_cal"] / g.c0
             inside = (err.abs() <= half).mean()
+            raw = (err.abs() <= 100 * Z95 * g["std"] / g.c0).mean()
             ax.fill_between(g.cycle, err - half, err + half, color=col, alpha=0.25, lw=0)
             ax.plot(g.cycle, err, color=col, lw=1.0,
-                    label=f"{name} {g.v1.iloc[0]:.1f}-{g.v2.iloc[0]:.1f} V, covers {100 * inside:.0f} %")
+                    label=f"{name} {g.v1.iloc[0]:.1f}-{g.v2.iloc[0]:.1f} V, covers {100 * inside:.0f} % (raw {100 * raw:.0f} %)")
         ax.set_title(f"Cell {cell} (held out)", fontsize=9)
         ax.grid(alpha=0.3)
         ax.legend(fontsize=6.5, loc="lower left")
@@ -110,7 +112,7 @@ def predictions(preds: dict[str, pd.DataFrame], regime: str = "any") -> None:
     fig.supylabel("Predicted - measured [SOH points]", fontsize=10)
     names = " vs ".join(preds)
     fig.suptitle(
-        f"{names}: held-out error with 95 % predictive band (nested, {regime}-width regime); "
+        f"{names}: held-out error with calibrated 95 % band (nested, {regime}-width regime); "
         "band crossing zero = measurement covered"
     )
     save_fig(fig, "predictions_gpr.png")

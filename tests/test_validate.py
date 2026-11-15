@@ -266,3 +266,55 @@ def test_m4_gives_no_estimate_without_ic():
     df.loc[[0, 1], ["ic_peak_h", "ic_peak_v"]] = np.nan
     m = metrics(outer_loco(df, "M4"))
     assert (m["n_IC_EDGE"], m["n_IC_SPARSE"], m["n"]) == (1, 1, 78)
+
+
+# --- calibrated GPR intervals ---------------------------------------------------------
+
+from soh.validate import calibration_factor  # noqa: E402
+
+
+def gaussian_preds(sigma_true, std, n=4000, seed=0):
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame(
+        dict(cell=1, reason="OK", c0=700.0, capacity=700.0, pred=700.0 + rng.normal(0, sigma_true, n), std=std)
+    )
+
+
+def test_calibration_factor_scales_std_to_the_errors():
+    p = gaussian_preds(sigma_true=2.0, std=1.0)
+    k = calibration_factor(p)
+    assert k == pytest.approx(2.0, rel=0.05)
+    assert calibration_factor(gaussian_preds(sigma_true=0.5, std=1.0)) == pytest.approx(0.5, rel=0.05)  # may narrow
+    m = metrics(p.assign(std_cal=p["std"] * k))
+    assert m["coverage95"] < 0.70
+    assert m["coverage95_cal"] == pytest.approx(0.95, abs=0.005)
+    assert m["interval_width_cal"] == pytest.approx(k * m["interval_width"])
+
+
+def test_calibration_factor_ignores_unanswered_and_needs_answers():
+    p = gaussian_preds(sigma_true=2.0, std=1.0, n=100)
+    q = p.copy()
+    q.loc[:9, "pred"] = np.nan
+    assert calibration_factor(q) == calibration_factor(p.iloc[10:])
+    assert np.isnan(calibration_factor(p.assign(pred=np.nan)))
+
+
+def test_held_out_cell_never_sets_its_own_calibration():
+    win = Win(3.6, 3.8)
+    feats = {win: synthetic_table(noise=0.3)}
+    base = inner_scores(feats, "M3").set_index("fold").k95
+    assert base.notna().all()
+    feats[win] = feats[win].copy()
+    feats[win].loc[feats[win].cell == 3, "capacity"] += 5.0  # cell 3 badly off
+    after = inner_scores(feats, "M3").set_index("fold").k95
+    assert after[3] == pytest.approx(base[3], abs=1e-6)
+    assert (after.drop(3) > base.drop(3)).all()  # every other fold saw it
+
+
+def test_outer_std_scaled_by_its_folds_factor():
+    feats = {Win(3.6, 3.8): synthetic_table(noise=0.3)}
+    pooled, _, log, _, preds = nested(feats, "M3", regimes=("any",))
+    pred, k = preds["any"], log[0].set_index("fold").k95
+    np.testing.assert_allclose(pred.std_cal, pred["std"] * pred.cell.map(k))
+    assert {"coverage95_cal", "interval_width_cal"} <= set(pooled[0])
+    assert "coverage95_cal" not in metrics(nested(feats, "M1", regimes=("any",))[4]["any"])
