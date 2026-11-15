@@ -2,8 +2,8 @@
 
 Estimators are each outer fold's trained model at the window that fold selected in
 the any-width regime (read from `results/window_log.csv`), refit on the clean
-training cells and then frozen. Each is applied only to its fold's held-out cell;
-the final all-cells model is never used here.
+training cells (M6 also on their offset copies) and then frozen. Each is applied
+only to its fold's held-out cell; the final all-cells model is never used here.
 
 Per trace, in this order:
 1. decimate to `period_s` by sample-and-hold on a logger clock with a random phase
@@ -125,7 +125,7 @@ def fold_models(
     """
     chosen = log[log.regime == REGIME]
     wins = {Win(r.v1, r.v2) for r in chosen.itertuples()}
-    feats = {w: feature_table(curves, w, detector) for w in wins}
+    feats = {w: feature_table(curves, w, detector, augment=True) for w in wins}
     cells = sorted({c.cell for c in curves})
     out = {}
     for r in chosen.itertuples():

@@ -22,6 +22,9 @@ A model answers a trace only when its features exist (reason OK). Training uses
 answered training traces; error metrics use answered held-out traces; every
 unanswered trace is counted by reason.
 
+M6 also trains on AUG_COPIES copies of each training trace shifted by a constant
+offset ~ U(-AUG_MAX_MV, +AUG_MAX_MV) mV. Copies are never predicted or scored.
+
 Fits are shared where the training set is identical: the inner fit that leaves out
 {fold F, inner cell H} serves fold F (predicting H) and fold H (predicting F), and
 each outer fit (all cells but F) is made once and reused across regimes. GPR fits
@@ -54,6 +57,9 @@ HELPS_MIN_CELLS = 7  # decision rule: model better than its control in >= 7 of 8
 HELPS = "helps"
 Z95 = 1.959964  # two-sided 95 % normal quantile
 CAL_QUANTILE = 0.95
+AUG_COPIES = 2
+AUG_MAX_MV = 8.0
+AUG_SEED = 1000
 
 
 class SelectionError(RuntimeError):
@@ -102,8 +108,24 @@ def feature_row(c: Curve, t: np.ndarray, v: np.ndarray, win: Win, detector=detec
     )
 
 
-def feature_table(curves: list[Curve], win: Win, detector=detect_window) -> pd.DataFrame:
-    return pd.DataFrame([feature_row(c, c.t, c.v, win, detector) for c in curves])
+def aug_offsets_mv(c: Curve) -> np.ndarray:
+    """Offsets [mV] of one trace's augmented copies."""
+    return np.random.default_rng([AUG_SEED, c.cell, c.cycle]).uniform(-AUG_MAX_MV, AUG_MAX_MV, AUG_COPIES)
+
+
+def feature_table(curves: list[Curve], win: Win, detector=detect_window, augment: bool = False) -> pd.DataFrame:
+    """Features of every trace (`aug` = 0); with `augment`, also of its offset copies (`aug` > 0)."""
+    rows = [{**feature_row(c, c.t, c.v, win, detector), "aug": 0} for c in curves]
+    if augment:
+        for c in curves:
+            for k, o in enumerate(aug_offsets_mv(c), start=1):
+                rows.append({**feature_row(c, c.t, c.v + o / 1000, win, detector), "aug": k})
+    return pd.DataFrame(rows)
+
+
+def originals(df: pd.DataFrame) -> pd.DataFrame:
+    """The measured traces of a feature table, without augmented copies."""
+    return df[df.aug == 0] if "aug" in df else df
 
 
 def model_reason(df: pd.DataFrame, model: str) -> pd.Series:
@@ -118,6 +140,8 @@ def _X(d: pd.DataFrame, model: str) -> np.ndarray:
 
 def fit_model(df: pd.DataFrame, model: str, train_cells):
     """Fit on the answered rows of `train_cells`; None if there are none."""
+    if not MODELS[model].augment:
+        df = originals(df)
     train = df[df.cell.isin(train_cells) & (model_reason(df, model) == Reason.OK.value)]
     if train.empty:
         return None
@@ -141,7 +165,8 @@ def predict_rows(est, test: pd.DataFrame, model: str) -> pd.DataFrame:
 
 def fit_predict(df: pd.DataFrame, model: str, test_cells, train_cells) -> pd.DataFrame:
     """Fit `model` on the answered rows of `train_cells`, predict the rows of `test_cells`."""
-    return predict_rows(fit_model(df, model, train_cells), df[df.cell.isin(test_cells)], model)
+    test = originals(df)
+    return predict_rows(fit_model(df, model, train_cells), test[test.cell.isin(test_cells)], model)
 
 
 def loco(df: pd.DataFrame, model: str, cells: list[int] | None = None) -> pd.DataFrame:
@@ -376,14 +401,14 @@ def paired(pred_model: pd.DataFrame, pred_base: pd.DataFrame, key=("cell", "cycl
 def main() -> None:
     curves, audit = load()
     grid = window_grid(round(audit.cutoff_v[0], 2))
-    features = {w: feature_table(curves, w) for w in grid}
+    features = {w: feature_table(curves, w, augment=True) for w in grid}
     print(f"{len(grid)} windows: {', '.join(map(str, grid))}")
 
     pooled, cells, log, scores, preds = [], [], [], [], {}
     for name in MODELS:
         t0 = time.perf_counter()
         p, c, lg, s, pr = nested(features, name)
-        print(f"{name}: {time.perf_counter() - t0:.0f} s")
+        print(f"{name}: {time.perf_counter() - t0:.0f} s", flush=True)
         pooled += p
         cells += c
         log += lg
@@ -410,6 +435,9 @@ def main() -> None:
         "partly because of a smoothing edge artifact: their dQ/dV peak (~3.82 V) lies within the "
         "Savitzky-Golay half-width of V1, and edge extrapolation puts the maximum in the first bin. "
         "M5 is GPR on the window's two halves, dq_a (V1 to the midpoint) and dq_b (midpoint to V2). "
+        f"M6 is M5 trained also on {AUG_COPIES} copies of each training trace shifted by a constant "
+        f"offset drawn from U(-{AUG_MAX_MV:g}, +{AUG_MAX_MV:g}) mV; it is scored and selects its window "
+        "on measured traces only. "
         "GPR models (M3, M4, M5): coverage95 is the share of answered traces whose measured capacity lies "
         "inside the 95 % predictive interval; interval_width is its mean full width in SOH points. "
         "The _cal columns use the std multiplied by the fold's k95 (95th percentile of |error| / std "

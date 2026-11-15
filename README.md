@@ -14,6 +14,8 @@ the GPR IC model also loses its edge at 30 s logging, and at 60 s neither IC mod
 gives an estimate at all. The most robust model is ΔQ with Gaussian-process
 regression: 0.45-0.64 SOH points across noise, ADC quantization and sparse logging.
 Its weak spot is a constant voltage-sensor offset: ±5 mV doubles its error.
+Training on offset-shifted copies of the logs (M6) halves that, at a cost of 0.02
+points on clean logs.
 
 Data: Oxford Battery Degradation Dataset 1, 8 cells, 519 charge curves. Every
 accuracy number below is from nested leave-one-cell-out validation. A streaming C
@@ -34,6 +36,7 @@ capacity. Each model picks its own voltage window inside every validation fold.
 | M3 | ΔQ, GPR | 0.45 | 0.65 | 3.6 | 26 min | 91 % |
 | M4 | ΔQ + IC peak, GPR | **0.31** | **0.44** | **2.1** | 34 min | 95 % |
 | M5 | ΔQ of each window half, GPR | 0.41 | 0.84 | 5.0 | 32 min | 97 % |
+| M6 | as M5, trained also on offset-shifted copies | 0.42 | 0.70 | 3.2 | 33 min | 93 % |
 
 RMSE is pooled over all held-out traces. Worst cell is the highest single-cell RMSE.
 Window is the median time the selected window takes at 1C. Coverage uses calibrated
@@ -44,6 +47,8 @@ if it beats its control on at least 7 of 8 held-out cells:
 - **IC peak, GPR (M4 vs M3):** better on 6 of 8, so no detectable gain when each
   model picks its window freely. At an equal 200 or 300 mV width it passes (7 and 8 of 8).
 - **Two segments (M5 vs M3):** better on 6 of 8, so no detectable gain.
+- **Offset augmentation (M6 vs M5):** better on 3 of 8, so no detectable gain on
+  clean logs. Under a ±5 mV offset it helps (7 and 8 of 8).
 
 ### BMS-like logs
 
@@ -51,16 +56,16 @@ Each fold's frozen model is applied to degraded copies of its held-out cell, wit
 20 random seeds where noise or sampling phase is random. Every model answers 100 % of
 traces unless marked.
 
-| Log condition | M1 | M2 | M3 | M4 | M5 |
-|---|---:|---:|---:|---:|---:|
-| Clean | 0.67 | 0.51 | 0.45 | **0.31** | 0.41 |
-| Noise σ = 2 mV | 0.69 | 0.53 | 0.46 | **0.42** | 0.43 |
-| Noise σ = 10 mV | 0.84 | 1.56 | **0.54** | 2.33 | 0.67 |
-| Offset ±5 mV | 1.36-1.41 | 0.54-0.56 | 0.96-0.98 | **0.30-0.35** | 0.93-1.03 |
-| ADC step 5 mV | 0.92 | **0.53** | 0.64 | 0.78 | 0.57 |
-| One sample per 30 s | 0.67 | 0.57 | 0.45 | 0.66 | **0.41** |
-| One sample per 60 s | 0.67 | no answer | 0.45 | no answer | **0.42** |
-| Combined: 2 mV noise, 1 mV ADC step, 10 s | 0.84 | 0.63 | **0.55** | 0.81 | 0.59 |
+| Log condition | M1 | M2 | M3 | M4 | M5 | M6 |
+|---|---:|---:|---:|---:|---:|---:|
+| Clean | 0.67 | 0.51 | 0.45 | **0.31** | 0.41 | 0.42 |
+| Noise σ = 2 mV | 0.69 | 0.53 | 0.46 | **0.42** | 0.43 | 0.44 |
+| Noise σ = 10 mV | 0.84 | 1.56 | **0.54** | 2.33 | 0.67 | 0.58 |
+| Offset ±5 mV | 1.36-1.41 | 0.54-0.56 | 0.96-0.98 | **0.30-0.35** | 0.93-1.03 | 0.47-0.48 |
+| ADC step 5 mV | 0.92 | 0.53 | 0.64 | 0.78 | 0.57 | **0.44** |
+| One sample per 30 s | 0.67 | 0.57 | 0.45 | 0.66 | **0.41** | 0.42 |
+| One sample per 60 s | 0.67 | no answer | 0.45 | no answer | **0.42** | **0.42** |
+| Combined: 2 mV noise, 1 mV ADC step, 10 s | 0.84 | 0.63 | **0.55** | 0.81 | 0.59 | 0.59 |
 
 ![RMSE per degradation level](results/degraded.png)
 
@@ -72,11 +77,16 @@ What the table shows:
 - **ΔQ is a time measurement and barely notices noise or sparse logging** once the
   window detector averages repeated level crossings (see Method). With the
   first-crossing rule used earlier, M1 reached 4.26 at 10 mV noise; now it is 0.84.
-- **A constant voltage offset is the one thing ΔQ cannot absorb.** It moves the
+- **A constant voltage offset is the one thing plain ΔQ cannot absorb.** It moves the
   window levels themselves. The IC models are nearly immune; the measured peak
   voltage moves with the offset, which likely lets them correct for it.
+- **Training on offset-shifted logs fixes most of it.** M6 halves M5's offset error
+  and keeps its tolerance of noise and sparse logging. It is the only model below
+  0.6 in every condition. The same training does not help M1: with one ΔQ input,
+  an offset looks like a capacity change.
 - **Calibrated intervals hold on clean data but not off it.** Calibrated M3 and M5
-  intervals cover only 53-66 % under a ±5 mV offset; M4 covers 49 % at 5 mV noise.
+  intervals cover only 53-66 % under a ±5 mV offset (M6 86-92 %); M4 covers 49 % at
+  5 mV noise.
 
 Per-cell tables, the window-width trade-off, interval calibration and every
 degraded case are in [`results/`](results/README.md).
@@ -110,7 +120,8 @@ giving 17 windows.
 - *No estimate:* a trace that never arms, never completes, has a gap over 120 s
   or gives no usable IC peak counts as unanswered, by reason. It is never dropped.
 
-**Models.** M0-M5 as in the table. GPR uses a Matérn 5/2 kernel with one length
+**Models.** M0-M6 as in the table. M6 also trains on two copies of each training
+trace with a constant offset drawn from ±8 mV; copies are never scored. GPR uses a Matérn 5/2 kernel with one length
 scale per input plus a white-noise term, on standardized inputs, with fixed seeds.
 
 **Validation.** Nested leave-one-cell-out:
@@ -159,16 +170,16 @@ against Python on synthetic traces that exercise every reason code.
 
 - **One cell type, one temperature, one charge protocol.** 8 cells at 40 °C, a clean
   1C constant-current charge from empty. No claim beyond that.
-- **Exploratory use of the 8 cells.** The detector change, M5 and interval
-  calibration were added after earlier results on the same 8 cells. The
+- **Exploratory use of the 8 cells.** The detector change, M5, interval
+  calibration and M6 were added after earlier results on the same 8 cells. The
   nested validation keeps each number honest, but the choice of which models to
   report was not blind. A new dataset would be needed for a generalization claim.
 - **Two cells drop abruptly near end of life** (cells 2 and 5, see
   [`results/capacity_fade.png`](results/capacity_fade.png)). They cause the largest
   errors of every model.
 - **Sensor errors not covered.** Current is assumed constant and known; a current-gain
-  error passes one-to-one into ΔQ and is not tested. Voltage offset is tested and is
-  the main weakness of the ΔQ models.
+  error passes one-to-one into ΔQ and is not tested. Voltage offset is tested only as
+  a constant; a drifting offset is not.
 - **Beginning-of-life capacity must be stored** per cell to turn capacity into SOH.
 - **Bench and offline only.** The C code is double precision and has not been
   ported to a microcontroller.
@@ -198,8 +209,8 @@ make data        # downloads the dataset (about 254 MB) to data/raw/, checked by
 make reproduce   # tests, audit, validation, degraded logs, frozen model, C agreement
 ```
 
-`make reproduce` takes roughly 10-50 minutes on an 8-core laptop, almost all of it
-GPR fits. Results are deterministic: afterwards `git diff results/*.csv` is empty.
+`make reproduce` takes about 80 minutes on a busy 8-core laptop, mostly M6's GPR
+fits. Results are deterministic: afterwards `git diff results/*.csv` is empty.
 `make test` alone needs no dataset; CI runs it on every push, together with a
 `-Werror` build of the C code with gcc and clang.
 

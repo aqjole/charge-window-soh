@@ -24,6 +24,7 @@ class Spec:
     factory: Callable
     needs_ic: bool = False  # no estimate when IC features are missing (no fallback)
     has_std: bool = False  # predict(X, return_std=True) gives a predictive std [mAh]
+    augment: bool = False  # also trains on offset-shifted copies
 
 
 def gpr(n_features: int) -> Callable:
@@ -53,6 +54,7 @@ MODELS = {
     "M3": Spec(("dq",), gpr(1), has_std=True),
     "M4": Spec(("dq", *IC_COLS), gpr(3), needs_ic=True, has_std=True),
     "M5": Spec(SEGMENT_COLS, gpr(2), has_std=True),
+    "M6": Spec(SEGMENT_COLS, gpr(2), has_std=True, augment=True),
 }
 
 # (model, its control, what the model adds) for paired comparisons
@@ -60,4 +62,5 @@ PAIRS = (
     ("M2", "M1", "IC peak"),
     ("M4", "M3", "IC peak"),
     ("M5", "M3", "two segments"),
+    ("M6", "M5", "offset augmentation"),
 )

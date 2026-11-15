@@ -37,6 +37,7 @@ Each model is also run with its window restricted to one width (RMSE, nested):
 | M3 ΔQ, GPR | 0.45 | 0.61 | 0.64 | 0.72 | **0.45** |
 | M4 ΔQ + IC, GPR | **0.31** | n/a | 0.39 | 0.34 | **0.31** |
 | M5 two segments, GPR | 0.41 | 0.62 | 0.52 | 0.95 | **0.34** |
+| M6 M5 + offset-shifted training copies | 0.42 | 0.51 | 0.43 | 0.52 | **0.36** |
 
 ![M1 accuracy against window length](accuracy_vs_window.png)
 
@@ -52,7 +53,7 @@ Each model is also run with its window restricted to one width (RMSE, nested):
   (about 3.82 V) lies within the Savitzky-Golay half-width of the window edge. The
   IC settings were frozen before the first run, so this is reported rather than tuned
   away.
-- **M5 is unstable at 300 mV:** one cell misses by up to 18 points.
+- **M5 is unstable at 300 mV:** one cell misses by up to 18 points (M6: under 2).
 
 ### Paired comparisons
 
@@ -61,25 +62,27 @@ Each model is also run with its window restricted to one width (RMSE, nested):
 | IC peak, linear (M2 vs M1) | **helps** (8/8) | 5/8 | 6/8 | **helps** (8/8) |
 | IC peak, GPR (M4 vs M3) | 6/8 | **helps** (7/8) | **helps** (8/8) | 6/8 |
 | Two segments (M5 vs M3) | 6/8 | 5/8 | 6/8 | 6/8 |
+| Offset augmentation (M6 vs M5) | 3/8 | **helps** (7/8) | 4/8 | 3/8 |
 
 The cell counts give the number of held-out cells on which the model beats its
 control. The rule, fixed before the first run, needs 7 of 8 (one-sided sign test,
 p = 0.035); anything less is reported as "no detectable gain". In the any-width
 column the two models may use different windows, so part of a gain can come from a
-longer window; the fixed-width columns compare at equal width.
+longer window; the fixed-width columns compare at equal width. M6 also helps at
+100 mV (7/8).
 
 ### Per cell
 
-| Cell | M1 | M2 | M3 | M4 | M5 |
-|---:|---:|---:|---:|---:|---:|
-| 1 | 0.54 | 0.15 | 0.30 | 0.18 | 0.29 |
-| 2 | 0.74 | 0.59 | 0.62 | 0.40 | 0.57 |
-| 3 | 0.34 | 0.14 | 0.14 | 0.21 | 0.21 |
-| 4 | 0.84 | 0.61 | 0.65 | 0.33 | 0.32 |
-| 5 | 1.15 | 1.10 | 0.33 | 0.44 | 0.84 |
-| 6 | 0.76 | 0.43 | 0.49 | 0.30 | 0.38 |
-| 7 | 0.54 | 0.52 | 0.61 | 0.39 | 0.22 |
-| 8 | 0.50 | 0.17 | 0.30 | 0.15 | 0.25 |
+| Cell | M1 | M2 | M3 | M4 | M5 | M6 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.54 | 0.15 | 0.30 | 0.18 | 0.29 | 0.23 |
+| 2 | 0.74 | 0.59 | 0.62 | 0.40 | 0.57 | 0.70 |
+| 3 | 0.34 | 0.14 | 0.14 | 0.21 | 0.21 | 0.22 |
+| 4 | 0.84 | 0.61 | 0.65 | 0.33 | 0.32 | 0.56 |
+| 5 | 1.15 | 1.10 | 0.33 | 0.44 | 0.84 | 0.52 |
+| 6 | 0.76 | 0.43 | 0.49 | 0.30 | 0.38 | 0.43 |
+| 7 | 0.54 | 0.52 | 0.61 | 0.39 | 0.22 | 0.36 |
+| 8 | 0.50 | 0.17 | 0.30 | 0.15 | 0.25 | 0.23 |
 
 RMSE per held-out cell, any-width regime. Cells 2 and 5 drop abruptly near end of
 life ([`capacity_fade.png`](capacity_fade.png)); every model's largest single error
@@ -89,18 +92,19 @@ falls on one of them.
 
 ![GPR held-out error with calibrated bands](predictions_gpr.png)
 
-The raw GPR 95 % intervals cover 87 % (M3), 92 % (M4) and 92 % (M5) of held-out
+The raw GPR 95 % intervals cover 87 % (M3), 92 % (M4), 92 % (M5) and 92 % (M6) of held-out
 measurements. They reflect noise within the training cells, not the spread between
 cells. Each fold therefore calibrates its intervals on its own training cells: the
 predictive std is scaled by k95, the 95th percentile of |error| / std over the inner
 held-out predictions, divided by 1.96. This reuses the inner fits; k95 ranges from
-1.06 to 1.57.
+1.01 to 1.57.
 
 | Model | Raw coverage | Calibrated coverage | Calibrated width |
 |---|---:|---:|---:|
 | M3 | 87 % | 91 % | 1.9 points |
 | M4 | 92 % | 95 % | 1.1 points |
 | M5 | 92 % | 97 % | 1.4 points |
+| M6 | 92 % | 93 % | 1.4 points |
 
 Calibration fixes the average, not cells whose error drifts with age. Cell 7 stays
 at 68 % (M3) and 77 % (M4), and cell 4 at 72 % (M3).
@@ -147,7 +151,8 @@ On clean traces the two rules are identical.
 - **ADC step:** a 5 mV step costs M1 (0.92) and M4 (0.78) the most.
 - **Offset:** shifts the window levels, which no detector can undo. M1 goes from 0.67
   to 1.36-1.41 at ±5 mV, M3 to 0.96-0.98, M5 to 0.93-1.03. The IC models barely move
-  (M4 0.30-0.35).
+  (M4 0.30-0.35). M6 goes from 0.42 to 0.47-0.48 and helps over M5 (7 and 8 of 8);
+  its calibrated intervals still cover 86-92 %, against 53-62 % for M5.
 - **M5** keeps part of what curve shape adds where the IC peak fails (0.47 at 5 mV
   noise, 0.42 at 60 s), but it is as offset-sensitive as the other ΔQ models and is
   never better than M3 on 7 of 8 cells.

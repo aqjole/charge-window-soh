@@ -318,3 +318,86 @@ def test_outer_std_scaled_by_its_folds_factor():
     np.testing.assert_allclose(pred.std_cal, pred["std"] * pred.cell.map(k))
     assert {"coverage95_cal", "interval_width_cal"} <= set(pooled[0])
     assert "coverage95_cal" not in metrics(nested(feats, "M1", regimes=("any",))[4]["any"])
+
+
+# --- offset-augmented training (M6) ----------------------------------------------------
+
+from soh.load import Curve  # noqa: E402
+from soh.validate import aug_offsets_mv, feature_table, fit_model, originals, AUG_COPIES, AUG_MAX_MV  # noqa: E402
+
+
+def augmented(df):
+    """Synthetic table plus AUG_COPIES copies per row; copies carry a junk dq."""
+    copies = [df.assign(aug=k, dq=df.dq + 1e3 * k) for k in range(1, AUG_COPIES + 1)]
+    return pd.concat([df.assign(aug=0), *copies], ignore_index=True)
+
+
+def spy_models(monkeypatch):
+    from soh import validate
+
+    seen = {}
+
+    def spy(name):
+        class Spy:
+            def fit(self, X, y):
+                seen.setdefault(name, []).append(X[:, 0].copy())
+                return self
+
+            def predict(self, X):
+                return np.zeros(len(X))
+
+        return Spy
+
+    monkeypatch.setitem(validate.MODELS, "PLAIN", Spec(("dq",), spy("PLAIN")))
+    monkeypatch.setitem(validate.MODELS, "AUG", Spec(("dq",), spy("AUG"), augment=True))
+    return seen
+
+
+def test_only_augmented_models_train_on_copies(monkeypatch):
+    seen = spy_models(monkeypatch)
+    df = augmented(synthetic_table())
+    for name in ("PLAIN", "AUG"):
+        pred = outer_loco(df, name)
+        assert len(pred) == 80 and (pred.aug == 0).all()
+    assert [len(x) for x in seen["PLAIN"]] == [70] * 8
+    assert all((x < 1e3).all() for x in seen["PLAIN"])
+    assert [len(x) for x in seen["AUG"]] == [70 * (1 + AUG_COPIES)] * 8
+
+
+def test_augmented_copies_of_held_out_cell_never_train(monkeypatch):
+    seen = spy_models(monkeypatch)
+    df = augmented(synthetic_table())
+    df.loc[(df.cell == 3) & (df.aug > 0), "dq"] = -1.0
+    fit_model(df, "AUG", [c for c in range(1, 9) if c != 3])
+    assert not (seen["AUG"][0] == -1.0).any()
+
+
+def test_inner_scores_identical_with_or_without_copies_for_plain_models():
+    feats = multi_window_features({Win(3.6, 3.8): 0.5, Win(3.5, 3.6): 2.0})
+    plain = inner_scores(feats, "M1")
+    aug = inner_scores({w: augmented(d) for w, d in feats.items()}, "M1")
+    pd.testing.assert_frame_equal(plain, aug)
+
+
+def toy_curve(cell, cycle):
+    t = np.arange(0.0, 3000.0)
+    return Curve(cell, cycle, t, 3.4 + 0.75 * np.sqrt(t / 3000.0), 700.0, 735.0)
+
+
+def test_aug_offsets_fixed_per_trace_and_in_range():
+    a, b = aug_offsets_mv(toy_curve(1, 100)), aug_offsets_mv(toy_curve(1, 100))
+    np.testing.assert_array_equal(a, b)
+    assert len(a) == AUG_COPIES and (np.abs(a) <= AUG_MAX_MV).all()
+    assert not np.array_equal(a, aug_offsets_mv(toy_curve(1, 200)))
+
+
+def test_augmented_feature_table_applies_each_copys_offset():
+    curves = [toy_curve(1, 0), toy_curve(2, 0)]
+    win = Win(3.6, 3.8)
+    plain, aug = feature_table(curves, win), feature_table(curves, win, augment=True)
+    pd.testing.assert_frame_equal(originals(aug).reset_index(drop=True), plain)
+    assert len(aug) == len(curves) * (1 + AUG_COPIES) and (aug.reason == "OK").all()
+    for c in curves:
+        rows = aug[aug.cell == c.cell].sort_values("aug")
+        dq0, dq_copies = rows.dq.iloc[0], rows.dq.iloc[1:].to_numpy()
+        np.testing.assert_array_equal(np.sign(dq0 - dq_copies), np.sign(aug_offsets_mv(c)))
