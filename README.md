@@ -174,15 +174,31 @@ against Python on synthetic traces that exercise every reason code.
   calibration and M6 were added after earlier results on the same 8 cells. The
   nested validation keeps each number honest, but the choice of which models to
   report was not blind. A new dataset would be needed for a generalization claim.
-- **Two cells drop abruptly near end of life** (cells 2 and 5, see
-  [`results/capacity_fade.png`](results/capacity_fade.png)). They cause the largest
-  errors of every model.
+- **Two cells have sudden capacity drops** (cells 2 and 5, see
+  [`results/capacity_fade.png`](results/capacity_fade.png)). Cell 5 loses 20 SOH
+  points at its last check (cycle 5000). Cell 2 dips by 5 points at cycle 5000 and by
+  8 at cycle 7400, and recovers at the following checks, partly after the first dip
+  and fully after the second. Every model's largest error falls on one of these two
+  cells.
 - **Sensor errors not covered.** Current is assumed constant and known; a current-gain
   error passes one-to-one into ΔQ and is not tested. Voltage offset is tested only as
   a constant; a drifting offset is not.
 - **Beginning-of-life capacity must be stored** per cell to turn capacity into SOH.
 - **Bench and offline only.** The C code is double precision and has not been
   ported to a microcontroller.
+
+## What would improve it
+
+- **The shipped estimator, more than the modelling.** The C code runs M1: 0.67 on
+  clean logs and 1.36-1.41 under a ±5 mV offset. M6 is already validated at 0.42 and
+  0.47-0.48, and stays below 0.6 in every tested condition. Porting it needs a GPR
+  prediction in C (training inputs and weights in the generated header), a third
+  accumulator for the window midpoint, and M6's own window (3.6-4.0 V in 7 of 8 folds).
+- **Below 0.31 on clean logs, nothing is demonstrated.** Giving each cell its own
+  beginning-of-life charge curve as a reference was screened and did not help
+  ([`results/`](results/README.md#beginning-of-life-reference)).
+- **Any further model is judged by the same rule:** better on at least 7 of 8 held-out
+  cells, with worst-cell RMSE and max error reported next to it.
 
 ## Related work
 

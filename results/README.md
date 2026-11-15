@@ -89,9 +89,29 @@ longer window; the fixed-width columns compare at equal width. M6 also helps at
 | 7 | 0.54 | 0.52 | 0.61 | 0.39 | 0.22 | 0.36 |
 | 8 | 0.50 | 0.17 | 0.30 | 0.15 | 0.25 | 0.23 |
 
-RMSE per held-out cell, any-width regime. Cells 2 and 5 drop abruptly near end of
-life ([`capacity_fade.png`](capacity_fade.png)); every model's largest single error
-falls on one of them.
+RMSE per held-out cell, any-width regime. Cells 2 and 5 have sudden
+capacity drops ([`capacity_fade.png`](capacity_fade.png)): cell 5 loses 20 SOH points
+at its last check (cycle 5000), and cell 2 dips by 5 points at cycle 5000 and by 8 at
+cycle 7400, recovering partly after the first and fully after the second. Every
+model's largest single error falls on one of these two cells.
+
+### Beginning-of-life reference
+
+Every model here is a population model: it never sees the held-out cell's own first
+charge curve. A fixed-window leave-one-cell-out check (not nested, not part of
+`make reproduce`) tested whether that curve helps. It scored each cell's later traces
+only, with M3 at 3.5-3.9 V and M4 and M5 at 3.6-4.0 V. It was screened and not added:
+
+- **There is a per-cell error, but the first trace does not reveal it.** A constant
+  per cell accounts for 33-50 % of the squared held-out error. Across cells, the error
+  on the first trace correlates with it only weakly (+0.3 for M3 and M4, about 0 for M5).
+- **Correcting each cell by its first-trace error raised the pooled RMSE** (M3 0.45 to
+  0.50-0.52, M4 0.31 to 0.35-0.37, M5 0.33 to 0.53-0.59) and beat the uncorrected
+  model on at most 6 of 8 cells.
+- **GPRs on ΔQ relative to the first trace did worse than the population models.**
+  Predicting capacity retention from ratios, or from present values plus their
+  changes, gave 0.49-0.58 against 0.45 (M3) and 0.33 (M5) at the same windows. One
+  variant, two segments plus their changes at 3.6-4.0 V, reached 2.03.
 
 ### GPR intervals
 
