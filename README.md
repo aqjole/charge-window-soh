@@ -8,16 +8,23 @@ estimation over a simple charge-counting (ΔQ) estimator, and does that gain sur
 noisy, sparse voltage logs like a real BMS produces?
 
 **Short answer.** On clean lab logs, IC helps: the IC peak cuts the linear model's
-error by a quarter, and the best model reaches 0.31 SOH points. On BMS-like logs the
+error by a quarter, and the GPR IC model reaches 0.31 SOH points. On BMS-like logs the
 gain is fragile. From 5 mV of voltage noise, the IC models do worse than plain ΔQ;
 the GPR IC model also loses its edge at 30 s logging, and at 60 s neither IC model
-gives an estimate at all. The most robust model is ΔQ with Gaussian-process
-regression: 0.45-0.64 SOH points across noise, ADC quantization and sparse logging.
+gives an estimate at all. Of the models that see the window as one or two numbers,
+the most robust is ΔQ with Gaussian-process regression: 0.45-0.64 SOH points across
+noise, ADC quantization and sparse logging.
 Its weak spot is a constant voltage-sensor offset: ±5 mV doubles its error.
 Training on offset-shifted copies of the logs (M6) halves that, at a cost of 0.02
 points on clean logs. Averaging the estimates of 5 charges removes most of what
 random noise and sampling add (M6 in the combined case: 0.59 to 0.46), but not an
 offset, and not the bias noise puts into the IC peak.
+
+Seeing more of the curve does better than the IC peak. M8 reads the window as 16
+segment charges, with the same running sums as the window detector, and trains also
+on offset and noise copies of its training logs. It reaches 0.23 on clean logs, the
+first model to beat the IC model by the rule below, and stays at 0.57 or less in
+every BMS-like case, within 0.02 of the best model in each.
 
 Data: Oxford Battery Degradation Dataset 1, 8 cells, 519 charge curves. Every
 accuracy number below is from nested leave-one-cell-out validation. A streaming C
@@ -36,9 +43,10 @@ capacity. Each model picks its own voltage window inside every validation fold.
 | M1 | ΔQ, linear | 0.67 | 1.15 | 7.5 | 25 min | |
 | M2 | ΔQ + IC peak, linear | 0.51 | 1.10 | 7.1 | 34 min | |
 | M3 | ΔQ, GPR | 0.45 | 0.65 | 3.6 | 26 min | 91 % |
-| M4 | ΔQ + IC peak, GPR | **0.31** | **0.44** | **2.1** | 34 min | 95 % |
+| M4 | ΔQ + IC peak, GPR | 0.31 | 0.44 | 2.1 | 34 min | 95 % |
 | M5 | ΔQ of each window half, GPR | 0.41 | 0.84 | 5.0 | 32 min | 97 % |
 | M6 | as M5, trained also on offset-shifted copies | 0.42 | 0.70 | 3.2 | 33 min | 93 % |
+| M8 | ΔQ of 16 window segments: linear on the halves + GPR on the rest, trained also on offset and noise copies | **0.23** | **0.36** | **1.9** | 34 min | 96 % |
 
 RMSE is pooled over all held-out traces. Worst cell is the highest single-cell RMSE.
 Window is the median time the selected window takes at 1C. Coverage uses calibrated
@@ -51,6 +59,8 @@ if it beats its control on at least 7 of 8 held-out cells:
 - **Two segments (M5 vs M3):** better on 6 of 8, so no detectable gain.
 - **Offset augmentation (M6 vs M5):** better on 3 of 8, so no detectable gain on
   clean logs. Under a ±5 mV offset it helps (7 and 8 of 8).
+- **Curve residual and noise copy (M8 vs M6):** helps, better on 8 of 8 cells.
+- **Curve instead of IC peak (M8 vs M4):** helps, better on 7 of 8 cells.
 
 ### BMS-like logs
 
@@ -58,16 +68,16 @@ Each fold's frozen model is applied to degraded copies of its held-out cell, wit
 20 random seeds where noise or sampling phase is random. Every model answers 100 % of
 traces unless marked.
 
-| Log condition | M1 | M2 | M3 | M4 | M5 | M6 |
-|---|---:|---:|---:|---:|---:|---:|
-| Clean | 0.67 | 0.51 | 0.45 | **0.31** | 0.41 | 0.42 |
-| Noise σ = 2 mV | 0.69 | 0.53 | 0.46 | **0.42** | 0.43 | 0.44 |
-| Noise σ = 10 mV | 0.84 | 1.56 | **0.54** | 2.33 | 0.67 | 0.58 |
-| Offset ±5 mV | 1.36-1.41 | 0.54-0.56 | 0.96-0.98 | **0.30-0.35** | 0.93-1.03 | 0.47-0.48 |
-| ADC step 5 mV | 0.92 | 0.53 | 0.64 | 0.78 | 0.57 | **0.44** |
-| One sample per 30 s | 0.67 | 0.57 | 0.45 | 0.66 | **0.41** | 0.42 |
-| One sample per 60 s | 0.67 | no answer | 0.45 | no answer | **0.42** | **0.42** |
-| Combined: 2 mV noise, 1 mV ADC step, 10 s | 0.84 | 0.63 | **0.55** | 0.81 | 0.59 | 0.59 |
+| Log condition | M1 | M2 | M3 | M4 | M5 | M6 | M8 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Clean | 0.67 | 0.51 | 0.45 | 0.31 | 0.41 | 0.42 | **0.23** |
+| Noise σ = 2 mV | 0.69 | 0.53 | 0.46 | 0.42 | 0.43 | 0.44 | **0.31** |
+| Noise σ = 10 mV | 0.84 | 1.56 | **0.54** | 2.33 | 0.67 | 0.58 | **0.54** |
+| Offset ±5 mV | 1.36-1.41 | 0.54-0.56 | 0.96-0.98 | 0.30-0.35 | 0.93-1.03 | 0.47-0.48 | **0.24-0.25** |
+| ADC step 5 mV | 0.92 | 0.53 | 0.64 | 0.78 | 0.57 | 0.44 | **0.24** |
+| One sample per 30 s | 0.67 | 0.57 | 0.45 | 0.66 | 0.41 | 0.42 | **0.23** |
+| One sample per 60 s | 0.67 | no answer | 0.45 | no answer | 0.42 | 0.42 | **0.26** |
+| Combined: 2 mV noise, 1 mV ADC step, 10 s | 0.84 | 0.63 | **0.55** | 0.81 | 0.59 | 0.59 | 0.57 |
 
 ![RMSE per degradation level](results/degraded.png)
 
@@ -83,12 +93,18 @@ What the table shows:
   window levels themselves. The IC models are nearly immune; the measured peak
   voltage moves with the offset, which likely lets them correct for it.
 - **Training on offset-shifted logs fixes most of it.** M6 halves M5's offset error
-  and keeps its tolerance of noise and sparse logging. It is the only model below
-  0.6 in every condition. The same training does not help M1: with one ΔQ input,
+  and keeps its tolerance of noise and sparse logging. It and M8 are the only models
+  below 0.6 in every condition. The same training does not help M1: with one ΔQ input,
   an offset looks like a capacity change.
+- **Seeing the whole window's curve gives the most robust model.** M8 is the lowest
+  in every case or within 0.02 of it. Offset, ADC step and sparse logging barely
+  move it (0.23-0.26). Strong noise is where it gains least: at 10 mV and in the
+  combined case it is level with M3 and M6. Its 16 short segments alone would be
+  noise-sensitive (the curve GPR without the linear part reached 1.18 combined);
+  the linear part on the two halves and the noise copies hold that back.
 - **Calibrated intervals hold on clean data but not off it.** Calibrated M3 and M5
   intervals cover only 53-66 % under a ±5 mV offset (M6 86-92 %); M4 covers 49 % at
-  5 mV noise.
+  5 mV noise. M8 is the exception (88-99 % in every case): it trains on that error.
 - **Averaging a few charges removes most of the random part.** A BMS sees a charge
   every cycle, so it can average its last estimates. With the mean of 5 simulated
   repeats, the combined case drops from 0.59 to 0.44 (M5) and 0.46 (M6), close to
@@ -125,12 +141,20 @@ giving 17 windows.
   Savitzky-Golay 7 points, order 2). These settings were frozen before the first
   run that used them.
 - *Two segments:* ΔQ of each half of the window, split at the midpoint voltage.
+- *Window curve:* ΔQ of 16 equal-voltage segments, from the time below 17 levels;
+  the two halves are their sums.
 - *No estimate:* a trace that never arms, never completes, has a gap over 120 s
   or gives no usable IC peak counts as unanswered, by reason. It is never dropped.
 
-**Models.** M0-M6 as in the table. M6 also trains on two copies of each training
-trace with a constant offset drawn from ±8 mV; copies are never scored. GPR uses a Matérn 5/2 kernel with one length
-scale per input plus a white-noise term, on standardized inputs, with fixed seeds.
+**Models.** M0-M6 and M8 as in the table. M6 also trains on two copies of each
+training trace with a constant offset drawn from ±8 mV; copies are never scored. M8
+trains on one such offset copy and one noise copy: the trace degraded as in one of
+the BMS-like cases below, with a seed those tests never use. Its GPR takes the 16
+segment charges unscaled, with one length scale, and models what a linear fit on the
+two halves leaves. M7, the same GPR without the linear part, was screened and not
+added ([details](results/README.md#curve-model-m8)). The other GPRs use a Matérn 5/2
+kernel with one length scale per input plus a white-noise term, on standardized
+inputs. All fits use fixed seeds.
 
 **Validation.** Nested leave-one-cell-out:
 
@@ -179,8 +203,9 @@ against Python on synthetic traces that exercise every reason code.
 - **One cell type, one temperature, one charge protocol.** 8 cells at 40 °C, a clean
   1C constant-current charge from empty. No claim beyond that.
 - **Exploratory use of the 8 cells.** The detector change, M5, interval
-  calibration, M6 and charge averaging were added after earlier results on the same
-  8 cells. The nested validation keeps each number honest, but the choice of which
+  calibration, M6, charge averaging and M8 were added after earlier results on the
+  same 8 cells. M8's noise copies come from the same family of conditions as the
+  BMS-like tests, so a kind of noise outside it is untested. The nested validation keeps each number honest, but the choice of which
   models to report was not blind. A new dataset would be needed for a generalization
   claim.
 - **Repeated charges are simulated.** The dataset has one charge per 100 cycles, so
@@ -208,11 +233,11 @@ against Python on synthetic traces that exercise every reason code.
   accumulator for the window midpoint, and M6's own window (3.6-4.0 V in 7 of 8 folds).
   A running mean of the last 5 estimates on top is one more accumulator and takes M6
   from 0.59 to 0.46 in the combined case.
-- **Below 0.31 on clean logs, nothing is demonstrated.** Giving each cell its own
-  beginning-of-life charge curve as a reference was screened and did not help
-  ([`results/`](results/README.md#beginning-of-life-reference)). The headroom is
-  small: the capacity of the complete charge, as a single input, also gives 0.31
-  ([`results/`](results/README.md#headroom-on-clean-logs)).
+- **Below 0.23 on clean logs, nothing is demonstrated.** M8 is already at the level
+  the complete charge gives with every input (0.24), and the labels themselves repeat
+  only to about 0.13 ([`results/`](results/README.md#headroom-on-clean-logs)). Giving
+  each cell its own beginning-of-life charge curve as a reference was screened and
+  did not help ([`results/`](results/README.md#beginning-of-life-reference)).
 - **Any further model is judged by the same rule:** better on at least 7 of 8 held-out
   cells, with worst-cell RMSE and max error reported next to it.
 
