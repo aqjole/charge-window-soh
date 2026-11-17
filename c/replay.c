@@ -1,14 +1,16 @@
 /*
  * Host replay: stream exported traces through the C estimator.
  *
- *   replay [v1_mV v2_mV a_mAh b] < traces.csv > estimates.csv
+ *   replay [v1_mV v2_mV a_mAh b] < traces.csv > estimates.csv    (M1)
+ *   replay m6 < traces.csv > estimates.csv                       (M6)
  *
  * Input:  header, then rows  cell,cycle,c0_mah,t_s,v_mV  (one trace = consecutive
  *         rows with the same cell and cycle), as written by `python -m soh.export`.
  * Output: header, then one row per trace  cell,cycle,reason,dq_mah,capacity_mah,soh
  *         (the last three empty unless reason is OK).
- * Without arguments the frozen configuration from soh_model.h is used; the four
- * optional arguments override the window and coefficients (used by the tests).
+ * Without arguments the frozen M1 from soh_model.h is used; the four optional
+ * arguments override its window and coefficients (used by the tests). `m6` uses
+ * the frozen M6 from soh_model_m6.h.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +18,7 @@
 
 #include "soh_est.h"
 #include "soh_model.h"
+#include "soh_model_m6.h"
 
 #define LINE_MAX_LEN 256
 
@@ -53,7 +56,7 @@ int main(int argc, char **argv)
 {
     soh_config cfg = {
         SOH_MODEL_V1_MV, SOH_MODEL_V2_MV, SOH_MODEL_ARM_BAND_MV, SOH_MODEL_END_BAND_MV,
-        SOH_MODEL_CURRENT_MA, SOH_MODEL_MAX_GAP_S, SOH_MODEL_A_MAH, SOH_MODEL_B, 0.0,
+        SOH_MODEL_CURRENT_MA, SOH_MODEL_MAX_GAP_S, SOH_MODEL_A_MAH, SOH_MODEL_B, 0.0, NULL,
     };
     soh_est est;
     char line[LINE_MAX_LEN];
@@ -61,13 +64,17 @@ int main(int argc, char **argv)
     double c0, t, v;
     int open = 0;
 
-    if (argc == 5) {
+    if (argc == 2 && strcmp(argv[1], "m6") == 0) {
+        cfg.v1_mV = SOH_M6_V1_MV;
+        cfg.v2_mV = SOH_M6_V2_MV;
+        cfg.gpr = &soh_m6_gpr;
+    } else if (argc == 5) {
         cfg.v1_mV = strtod(argv[1], NULL);
         cfg.v2_mV = strtod(argv[2], NULL);
         cfg.a_mAh = strtod(argv[3], NULL);
         cfg.b = strtod(argv[4], NULL);
     } else if (argc != 1) {
-        fprintf(stderr, "usage: %s [v1_mV v2_mV a_mAh b] < traces.csv\n", argv[0]);
+        fprintf(stderr, "usage: %s [v1_mV v2_mV a_mAh b | m6] < traces.csv\n", argv[0]);
         return 2;
     }
 

@@ -1,0 +1,2 @@
+model,v1,v2,width_mv,selection_score,answer_rate,n_train,n_measured,length_scale_a,length_scale_b,amplitude,header_kb
+M6,3.6000,4.0000,400,0.3614,1.0000,1557,519,3.9373,3.4920,3.0657,108

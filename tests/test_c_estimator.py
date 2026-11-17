@@ -11,9 +11,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from soh.agree import c_estimates, compare, python_estimates
+from soh.agree import c_estimates, compare, python_estimates, python_estimates_gpr
 from soh.export import COLUMNS
-from soh.freeze import Frozen, header_text
+from soh.freeze import Frozen, gpr_header_text, gpr_params, header_text
+from soh.models import gpr
 from soh.report import ROOT
 from soh.validate import Win
 
@@ -26,13 +27,28 @@ ARGS = ("3600", "4000", "12.5", "1.75")
 C0 = 740.0
 
 
+def synthetic_gpr():
+    """A small GPR of the M6 kind on (dq_a, dq_b) around the ramps used here (about 82 mAh each)."""
+    rng = np.random.default_rng(7)
+    x = rng.uniform(60.0, 105.0, (40, 2))
+    y = 300.0 + 2.0 * x[:, 0] + 1.5 * x[:, 1] + 0.02 * (x[:, 0] - 80.0) ** 2 + rng.normal(0.0, 0.5, 40)
+    return gpr(2)().fit(x, y)
+
+
+GPR = synthetic_gpr()
+
+
 @pytest.fixture(scope="module")
 def replay(tmp_path_factory):
     d = tmp_path_factory.mktemp("c")
     (d / "soh_model.h").write_text(header_text(FROZEN))
+    (d / "soh_model_m6.h").write_text(gpr_header_text(gpr_params(WIN, GPR)))
     exe = d / "replay"
+    # compile a copy of replay.c: quoted includes search the including file's own directory first,
+    # so the original would pick up the frozen headers in c/ instead of the synthetic ones here
+    shutil.copy(ROOT / "c" / "replay.c", d / "replay.c")
     cmd = [CC, "-std=c99", "-O2", "-Wall", "-Wextra", "-pedantic", "-Werror", "-ffp-contract=off",
-           f"-I{d}", f"-I{ROOT / 'c'}", "-o", str(exe), str(ROOT / "c" / "replay.c"), str(ROOT / "c" / "soh_est.c"), "-lm"]
+           f"-I{d}", f"-I{ROOT / 'c'}", "-o", str(exe), str(d / "replay.c"), str(ROOT / "c" / "soh_est.c"), "-lm"]
     subprocess.run(cmd, check=True)
     return exe
 
@@ -49,7 +65,11 @@ def run_both(replay, tmp_path, traces, args=ARGS):
     path = tmp_path / "traces.csv"
     df.to_csv(path, index=False, float_format="%.9g", lineterminator="\n")
     df = pd.read_csv(path)  # both sides see the same rounded numbers
-    py, c = python_estimates(df, FROZEN), c_estimates(path, replay, args)
+    if args == ("m6",):
+        py = python_estimates_gpr(df, WIN, GPR)
+    else:
+        py = python_estimates(df, FROZEN)
+    c = c_estimates(path, replay, args)
     return py, c, compare(py, c)
 
 
@@ -119,3 +139,40 @@ def test_frozen_header_round_trips():
     assert float(vals["SOH_MODEL_A_MAH"]) == 91.925359066971623
     assert float(vals["SOH_MODEL_B"]) == 1.986876473314624
     assert float(vals["SOH_MODEL_V1_MV"]) == 3800.0
+
+
+def bent(seed, knee_v, dt=1.0, sigma_v=0.0):
+    """Ramp whose slope changes at `knee_v`, so dq_a and dq_b differ; optional noise."""
+    rng = np.random.default_rng(seed)
+    r1, r2 = rng.uniform(0.4e-3, 0.6e-3, 2)
+    t = np.arange(0.0, 4000.0, dt)
+    t_knee = (knee_v - 3.0) / r1
+    v = np.where(t < t_knee, 3.0 + r1 * t, knee_v + r2 * (t - t_knee))
+    return t, v + rng.normal(0.0, sigma_v, len(t)) if sigma_v else v
+
+
+def test_m6_matches_sklearn_on_clean_traces(replay, tmp_path):
+    traces = {k: bent(k, knee_v=3.7 + 0.01 * k) for k in range(20)}
+    py, c, r = run_both(replay, tmp_path, traces, args=("m6",))
+    assert r["passed"] and r["n_OK"] == 20
+    assert r["max_abs_diff_soh"] < 1e-9
+    assert c.capacity_mah.nunique() == 20  # the GPR sees different inputs
+
+
+def test_m6_matches_sklearn_on_noisy_quantized_traces(replay, tmp_path):
+    traces = {}
+    for k in range(10):
+        t, v = bent(200 + k, knee_v=3.8, dt=10.0, sigma_v=0.002)
+        traces[k] = (t, np.round(v / 0.001) * 0.001)  # samples land exactly on V1, the midpoint and V2
+    py, c, r = run_both(replay, tmp_path, traces, args=("m6",))
+    assert r["passed"] and r["n_OK"] == 10
+    assert r["max_abs_diff_soh"] < 1e-9
+
+
+def test_m6_reason_codes_match(replay, tmp_path):
+    t, v = ramp()
+    gap_in = ~((v > 3.7) & (v < 3.8))
+    traces = {0: (t, v + 0.7), 1: (t[v < 3.95], v[v < 3.95]), 2: (t[gap_in], v[gap_in])}
+    py, c, r = run_both(replay, tmp_path, traces, args=("m6",))
+    assert r["passed"]
+    assert list(c.reason) == ["NOT_ARMED", "NO_V2", "GAP"]

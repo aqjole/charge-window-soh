@@ -36,7 +36,7 @@ export: venv $(DATA)
 	$(PY) -m soh.export
 
 c: build/replay
-build/replay: c/replay.c c/soh_est.c c/soh_est.h c/soh_model.h
+build/replay: c/replay.c c/soh_est.c c/soh_est.h c/soh_model.h c/soh_model_m6.h
 	mkdir -p build
 	$(CC) $(CFLAGS) -Ic -o $@ c/replay.c c/soh_est.c -lm
 
