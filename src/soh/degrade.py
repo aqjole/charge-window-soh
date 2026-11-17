@@ -273,6 +273,7 @@ def main() -> None:
     )
     write_table(pairs, "degraded_paired", "Degraded-log tests: paired comparison", pair_note)
     plots.degraded(summary)
+    plots.summary(summary)
 
     avg = summarize_avg(preds)
     avg_note = (

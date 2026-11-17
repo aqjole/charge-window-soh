@@ -22,10 +22,12 @@ def write_table(df: pd.DataFrame, stem: str, title: str, note: str = "") -> None
     (RESULTS / f"{stem}.md").write_text("\n".join(md) + "\n")
 
 
-def save_fig(fig, name: str) -> None:
+def save_fig(fig, name: str, tight: bool = True) -> None:
+    """Save to results/. `tight=False` keeps a layout the caller has already set."""
     import matplotlib.pyplot as plt
 
     RESULTS.mkdir(exist_ok=True)
-    fig.tight_layout()
+    if tight:
+        fig.tight_layout()
     fig.savefig(RESULTS / name, dpi=150, metadata={"Software": None})
     plt.close(fig)

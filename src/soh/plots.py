@@ -164,3 +164,44 @@ def degraded(summary: pd.DataFrame, models=("M1", "M2", "M3", "M4", "M5", "M6"),
     fig.suptitle("Frozen fold models (any-width windows) on degraded copies of their held-out cell; "
                  "dashed: old first-crossing detector; answer rate is 100 % unless marked")
     save_fig(fig, "degraded.png")
+
+
+def summary(table: pd.DataFrame) -> None:
+    """README figure: four models under the three log faults that separate them.
+
+    A reduced view of `degraded`: one shared RMSE axis, descriptive names, and text
+    sized for the README column. Colour and marker both identify the model.
+    """
+    table = table[table.detector == "time-below"]
+    models = {
+        "M1": ("ΔQ, linear (M1)", "#2a78d6", "o"),
+        "M3": ("ΔQ, GPR (M3)", "#1baf7a", "s"),
+        "M4": ("ΔQ + IC peak, GPR (M4)", "#e34948", "^"),
+        "M6": ("ΔQ of two segments, GPR, offset-trained (M6)", "#6250d6", "D"),
+    }
+    panels = [
+        ("Voltage noise", "Noise sigma [mV]", ["clean", "noise 1 mV", "noise 2 mV", "noise 5 mV", "noise 10 mV"], ["0", "1", "2", "5", "10"]),
+        ("Sparse logging", "Sample period [s]", ["period 1 s", "period 10 s", "period 30 s", "period 60 s"], ["1", "10", "30", "60"]),
+        ("Constant sensor offset", "Voltage offset [mV]", ["offset -5 mV", "clean", "offset +5 mV"], ["-5", "0", "+5"]),
+    ]
+    fig, axes = plt.subplots(1, len(panels), figsize=(10, 4.1), sharey=True, gridspec_kw=dict(width_ratios=[5, 4, 3]))
+    for ax, (title, xlabel, cases, ticks) in zip(axes, panels):
+        for m, (label, color, marker) in models.items():
+            g = table[table.model == m].set_index("case").loc[cases]
+            ax.plot(range(len(cases)), g.rmse, marker=marker, ms=6, lw=2, color=color, label=label)
+            for xi in [i for i, rate in enumerate(g.answer_rate) if rate == 0]:
+                ax.plot(xi, 0, "x", color=color, ms=9, mew=2.5, clip_on=False, zorder=5)
+                ax.annotate(f"{m}: no estimate", (xi, 0), xytext=(-8, 7), textcoords="offset points",
+                            fontsize=9, color="0.25", ha="right")
+        ax.set_xticks(range(len(cases)), ticks)
+        ax.set_xlim(-0.3, len(cases) - 0.7)
+        ax.set_title(title, fontsize=11)
+        ax.set_xlabel(xlabel)
+        ax.grid(alpha=0.3)
+        ax.spines[["top", "right"]].set_visible(False)
+    axes[0].set_ylim(0, 2.5)
+    axes[0].set_ylabel("Held-out RMSE [SOH points]")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=2, fontsize=10, frameon=False)
+    fig.tight_layout(rect=(0, 0, 1, 0.86))
+    save_fig(fig, "summary.png", tight=False)

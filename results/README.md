@@ -17,13 +17,15 @@ the cell's first capacity, on answered traces only. The top-level
 | [`window_log.md`](window_log.md) | Window chosen in each outer fold, its inner score and the GPR calibration factor k95 |
 | [`inner_scores.md`](inner_scores.md) | Every inner leave-one-cell-out score behind those choices |
 | [`degraded.md`](degraded.md), [`degraded.png`](degraded.png) | Every model under every degraded-log case, both window detectors, seed spread |
+| [`summary.png`](summary.png) | Four models under noise, sparse logging and offset: the figure at the top of the main README |
 | [`degraded_paired.md`](degraded_paired.md) | Paired verdicts per degraded case |
 | [`degraded_avg.md`](degraded_avg.md) | Mean of 5 charges against a single charge, per degraded case with random noise or phase |
 | [`accuracy_vs_window.png`](accuracy_vs_window.png) | M1 accuracy against window length |
 | [`charge_curves_window.png`](charge_curves_window.png) | Charge and IC curves of cell 1 with the most-selected windows |
 | [`predictions_gpr.png`](predictions_gpr.png) | M3 and M4 held-out error over life, with calibrated 95 % bands |
 | [`frozen.md`](frozen.md), [`frozen_scores.md`](frozen_scores.md) | The shipped M1: window, coefficients, selection scores |
-| [`c_agreement.md`](c_agreement.md) | C estimator against the Python reference |
+| [`frozen_m6.md`](frozen_m6.md), [`frozen_m6_scores.md`](frozen_m6_scores.md) | The shipped M6: window, kernel, training-set size, selection scores |
+| [`c_agreement.md`](c_agreement.md) | C estimator (M1 and M6) against the Python reference |
 
 ## Clean logs
 
@@ -242,20 +244,20 @@ Calibrated coverage, from clean data to degraded:
 | Model | Clean | Noise 5 mV | Noise 10 mV | Offset ±5 mV | Combined |
 |---|---:|---:|---:|---:|---:|
 | M3 | 91 % | 91 % | 88 % | 64-66 % | 88 % |
-| M4 | 95 % | 49 % | 31 % | 93-98 % | 56 % |
+| M4 | 95 % | 49 % | 31 % | 92-98 % | 56 % |
 | M5 | 97 % | 90 % | 75 % | 53-62 % | 78 % |
 
 The calibration is set on clean data, so it cannot anticipate a sensor error. Each
 model's intervals fail on exactly the error that moves its point estimate.
 
-## Shipped estimator
+## Shipped estimators
 
-[`frozen.md`](frozen.md): the window rule is applied once more, over all 8 cells.
-It picks 3.8-4.0 V, then M1 is fit on all cells:
-capacity [mAh] = 91.925 + 1.98688 · ΔQ [mAh].
+The window rule is applied once more, over all 8 cells, and each model is then fit
+on all of them. A selection score is computed on the cells that chose the window,
+so it is not an accuracy estimate; the nested numbers are.
 
-The selection score (0.575) is computed on the cells that chose the window, so it is
-not an accuracy estimate; the nested M1 numbers are. The choice is close:
+**M1** ([`frozen.md`](frozen.md)): 3.8-4.0 V,
+capacity [mAh] = 91.925 + 1.98688 · ΔQ [mAh]. The choice is close:
 
 | Window | Selection score |
 |---|---:|
@@ -266,9 +268,27 @@ not an accuracy estimate; the nested M1 numbers are. The choice is close:
 These are the same three windows the outer folds picked. All 17 scores are in
 [`frozen_scores.md`](frozen_scores.md).
 
+**M6** ([`frozen_m6.md`](frozen_m6.md)): 3.6-4.0 V, the window 7 of the 8 outer
+folds picked. Here the choice is not close:
+
+| Window | Selection score |
+|---|---:|
+| 3.6-4.0 V | 0.361 |
+| 3.7-3.9 V | 0.395 |
+| 3.8-3.9 V | 0.444 |
+
+The GPR is fit on 1,557 points: the 519 measured traces and two offset-shifted
+copies of each. The generated header `c/soh_model_m6.h` (108 kB of text) holds what
+the predictive mean needs: the scaled training inputs, the weights, the input
+scaler, the kernel amplitude and the target mean and std. The predictive std needs
+the 1,557 × 1,557 Cholesky factor and is not exported, so the C estimator returns
+M6's estimate without an interval. All 17 scores are in
+[`frozen_m6_scores.md`](frozen_m6_scores.md).
+
 [`c_agreement.md`](c_agreement.md): the C estimator and Python read the same
 exported traces. On all 519 clean traces and on seed 0 of the combined case, every
-trace gets the same reason code. The SOH difference is below 1e-14, against a gate
-of 1e-4. The real traces are all answered, so the other reason codes (never armed,
-never completed, sample gap) are covered by synthetic-trace tests in
+trace gets the same reason code for both models. The SOH difference is below 1e-14
+for M1 and below 1e-11 for M6, where the reference is the fitted scikit-learn GPR,
+against a gate of 1e-4. The real traces are all answered, so the other reason codes
+(never armed, never completed, sample gap) are covered by synthetic-trace tests in
 `tests/test_c_estimator.py`.
