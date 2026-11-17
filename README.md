@@ -191,8 +191,8 @@ in one of the BMS-like cases below, with a seed those tests never use. All GPRs 
 a Matérn 5/2 kernel plus a white-noise term. M3-M6 have one length scale per input,
 on standardized inputs. M8's GPR takes the 16 segment charges unscaled, with one
 shared length scale, and models what a linear fit on the two halves leaves. M7, the
-same GPR without the linear part and without the noise copy, was screened and not
-added ([details](results/README.md#curve-model-m8)). All fits use fixed seeds.
+same GPR without the linear part and without the noise copy, was validated the same
+way and not added ([details](results/README.md#curve-model-m8)). All fits use fixed seeds.
 
 **Validation.** Nested leave-one-cell-out:
 

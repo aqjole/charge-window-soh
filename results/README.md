@@ -120,11 +120,14 @@ case, cycling over the traces) with a seed no degraded test uses.
   two cells with sudden drops (cell 5: 0.33 against M6's 0.52) and on cell 4.
 - **Every fold picks 3.6-4.0 V.** At fixed widths below 400 mV it is no better than
   M4 or M6 by the rule.
+- **M7 was validated and not added.** M7 is the curve GPR alone, without the linear
+  part and trained on offset copies only. It went through the same nested
+  validation and degraded-log tests as the other models, outside `make reproduce`.
+  It scored 0.25 clean, better than M6 on 8 of 8 cells but than M4 on only 5 of 8,
+  and noise on the 25 mV segments broke it (1.05 at 10 mV, 1.18 combined).
 - **Screened and not added** (fixed-window leave-one-cell-out at 3.6-4.0 V and
-  3.7-3.9 V, not part of `make reproduce`): the curve GPR alone, without the linear
-  part and trained on offset copies only (M7). Nested, it scored 0.25 clean, but noise on
-  the 25 mV segments broke it (1.05 at 10 mV, 1.18 combined). Noise copies alone
-  helped it less than M8's linear part plus noise copies. A one-state exponential
+  3.7-3.9 V, not part of `make reproduce`). Noise copies alone helped the curve GPR
+  less than M8's linear part plus noise copies. A one-state exponential
   filter on the voltage before the detector made noise worse (10 mV: 1.1 to 1.7-2.3):
   time-below-level already averages independent noise, and a filter turns it into a
   slow wander that shifts each level crossing as a whole. Generic regressors on the
