@@ -2,7 +2,7 @@
 
 Estimators are each outer fold's trained model at the window that fold selected in
 the any-width regime (read from `results/window_log.csv`), refit on the clean
-training cells (M6 also on their offset copies) and then frozen. Each is applied
+training cells (M6 also on their offset copies, M8 on an offset and a noise copy) and then frozen. Each is applied
 only to its fold's held-out cell; the final all-cells model is never used here.
 
 Per trace, in this order:

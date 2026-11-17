@@ -19,3 +19,13 @@ M6,M5,offset augmentation,w100,519.0000,0.6160,0.5054,0.5660,0.4444,7.0000,8.000
 M6,M5,offset augmentation,w200,519.0000,0.5155,0.4289,0.4901,0.3953,7.0000,8.0000,0.0352,helps
 M6,M5,offset augmentation,w300,519.0000,0.9491,0.5233,0.7874,0.4867,4.0000,8.0000,0.6367,no detectable gain
 M6,M5,offset augmentation,w400,519.0000,0.3445,0.3564,0.3322,0.3614,3.0000,8.0000,0.8555,no detectable gain
+M8,M6,curve residual and noise copy,any,519.0000,0.4243,0.2309,0.4065,0.2227,8.0000,8.0000,0.0039,helps
+M8,M6,curve residual and noise copy,w100,519.0000,0.5054,0.3714,0.4444,0.3459,6.0000,8.0000,0.1445,no detectable gain
+M8,M6,curve residual and noise copy,w200,519.0000,0.4289,0.3955,0.3953,0.3833,4.0000,8.0000,0.6367,no detectable gain
+M8,M6,curve residual and noise copy,w300,519.0000,0.5233,0.3115,0.4867,0.2868,5.0000,8.0000,0.3633,no detectable gain
+M8,M6,curve residual and noise copy,w400,519.0000,0.3564,0.2309,0.3614,0.2227,7.0000,8.0000,0.0352,helps
+M8,M4,curve instead of IC peak,any,519.0000,0.3061,0.2309,0.2984,0.2227,7.0000,8.0000,0.0352,helps
+M8,M4,curve instead of IC peak,w100,,,,,,,,,n/a (no eligible window)
+M8,M4,curve instead of IC peak,w200,519.0000,0.3898,0.3955,0.3592,0.3833,3.0000,8.0000,0.8555,no detectable gain
+M8,M4,curve instead of IC peak,w300,519.0000,0.3439,0.3115,0.3263,0.2868,5.0000,8.0000,0.3633,no detectable gain
+M8,M4,curve instead of IC peak,w400,519.0000,0.3061,0.2309,0.2984,0.2227,7.0000,8.0000,0.0352,helps
