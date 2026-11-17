@@ -18,7 +18,11 @@ Window detector, time-below-level (same rules as the C estimator):
   contributes window time is longer than MAX_GAP_S.
 - The same accumulation at the midpoint level Vm = (V1 + V2) / 2 gives tm, which
   splits the window into two segments: dq_a = I (tm - t1), dq_b = I (t2 - tm), and
-  dq_a + dq_b = dq (used by M5 only).
+  dq_a + dq_b = dq (used by M5 and M6).
+- The same accumulation at N_SEG + 1 equally spaced levels from V1 to V2 gives the
+  window's charge curve as N_SEG segment charges (used by M8). Their sum is dq, and
+  the first and second half sum to dq_a and dq_b. Still two running sums per level
+  and no sample buffer.
 
 `detect_first_crossing` is the rule used up to commit 6. It is kept only as the
 baseline in the degraded-log comparison.
@@ -49,6 +53,7 @@ IC_BIN_V = 0.005
 IC_SG_LEN = 7
 IC_SG_ORDER = 2
 IC_MAX_EMPTY = 0.5
+N_SEG = 16  # segments of the window's charge curve (M8); even, so the halves split at Vm
 
 
 class Reason(str, Enum):
@@ -76,6 +81,7 @@ class Window:
     k2: int = -1  # first sample index at or after t2
     tm: float = float("nan")  # time at the midpoint level (V1 + V2) / 2
     current_ma: float = NOMINAL_CURRENT_MA
+    levels: tuple[float, ...] = ()  # times at the N_SEG + 1 equally spaced levels, V1 to V2
 
     @property
     def ok(self) -> bool:
@@ -90,6 +96,13 @@ class Window:
     def dq_b(self) -> float:
         """Charge from the midpoint level to V2 [mAh]."""
         return self.current_ma * (self.t2 - self.tm) / 3600.0
+
+    @property
+    def segments(self) -> np.ndarray:
+        """Charge in each of the N_SEG equal-voltage segments [mAh]; NaN if the window failed."""
+        if not self.levels:
+            return np.full(N_SEG, np.nan)
+        return self.current_ma * np.diff(self.levels) / 3600.0
 
 
 def crossing_time(t: np.ndarray, v: np.ndarray, level: float, start: int = 0) -> tuple[float, int]:
@@ -117,6 +130,11 @@ def time_below(t: np.ndarray, v: np.ndarray, level: float) -> np.ndarray:
     return frac * np.diff(t)
 
 
+def segment_levels(v1: float, v2: float) -> np.ndarray:
+    """The N_SEG + 1 voltage levels that split [v1, v2] into equal segments."""
+    return np.linspace(v1, v2, N_SEG + 1)
+
+
 def detect_window(
     t: np.ndarray,
     v: np.ndarray,
@@ -142,10 +160,11 @@ def detect_window(
         return Window(Reason.GAP)
     t1, t2 = float(ts[0] + below1.sum()), float(ts[0] + below2.sum())
     tm = float(ts[0] + time_below(ts, vs, (v1 + v2) / 2).sum())
+    levels = tuple(float(ts[0] + time_below(ts, vs, x).sum()) for x in segment_levels(v1, v2))
     duration = t2 - t1
     eps = 1e-9  # a level met exactly on a sample belongs to the window
     k1, k2 = int(np.searchsorted(t, t1 - eps)), int(np.searchsorted(t, t2 - eps))
-    return Window(Reason.OK, current_ma * duration / 3600.0, duration, t1, t2, k1, k2, tm, current_ma)
+    return Window(Reason.OK, current_ma * duration / 3600.0, duration, t1, t2, k1, k2, tm, current_ma, levels)
 
 
 def detect_first_crossing(
@@ -170,8 +189,9 @@ def detect_first_crossing(
     if np.diff(t[k1 - 1 : k2 + 1]).max() > max_gap_s:
         return Window(Reason.GAP)
     tm, _ = crossing_time(t, v, (v1 + v2) / 2, start=k1)
+    levels = tuple(crossing_time(t, v, x, start=k1)[0] for x in segment_levels(v1, v2))
     duration = t2 - t1
-    return Window(Reason.OK, current_ma * duration / 3600.0, duration, t1, t2, k1, k2, tm, current_ma)
+    return Window(Reason.OK, current_ma * duration / 3600.0, duration, t1, t2, k1, k2, tm, current_ma, levels)
 
 
 @dataclass(frozen=True)

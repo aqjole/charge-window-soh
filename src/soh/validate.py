@@ -23,7 +23,11 @@ answered training traces; error metrics use answered held-out traces; every
 unanswered trace is counted by reason.
 
 M6 also trains on AUG_COPIES copies of each training trace shifted by a constant
-offset ~ U(-AUG_MAX_MV, +AUG_MAX_MV) mV. Copies are never predicted or scored.
+offset ~ U(-AUG_MAX_MV, +AUG_MAX_MV) mV. M8 trains on the first offset copy and one
+noise copy: the trace degraded as in one of the degraded-log cases (NOISE_COPY_CASES,
+cycling over the traces) with seed NOISE_COPY_SEED, which no degraded test uses. Copies
+are made of training cells only, as part of each cell's table, and are never predicted
+or scored; a held-out cell's copies never train its model.
 
 Fits are shared where the training set is identical: the inner fit that leaves out
 {fold F, inner cell H} serves fold F (predicting H) and fold H (predicting F), and
@@ -44,7 +48,7 @@ from joblib import Parallel, delayed
 
 from soh.features import END_BAND_V, NO_ESTIMATE_REASONS, Reason, detect_window, ic_features
 from soh.load import Curve, load
-from soh.models import MODELS, PAIRS
+from soh.models import CURVE_COLS, MODELS, PAIRS
 from soh import plots
 from soh.report import write_table
 
@@ -60,6 +64,11 @@ CAL_QUANTILE = 0.95
 AUG_COPIES = 2
 AUG_MAX_MV = 8.0
 AUG_SEED = 1000
+# M8's noise copy (aug = NOISE_COPY): one per trace, its condition cycling over these
+# degraded-log cases, with a seed outside the degraded tests' seeds 0-19.
+NOISE_COPY = AUG_COPIES + 1
+NOISE_COPY_SEED = 101
+NOISE_COPY_CASES = ("noise 2 mV", "noise 5 mV", "noise 10 mV", "LSB 5 mV", "period 30 s", "combined")
 
 
 class SelectionError(RuntimeError):
@@ -105,6 +114,7 @@ def feature_row(c: Curve, t: np.ndarray, v: np.ndarray, win: Win, detector=detec
         duration_s=w.duration_s,
         capacity=c.capacity_mah,
         c0=c.c0_mah,
+        **dict(zip(CURVE_COLS, w.segments)),
     )
 
 
@@ -113,14 +123,37 @@ def aug_offsets_mv(c: Curve) -> np.ndarray:
     return np.random.default_rng([AUG_SEED, c.cell, c.cycle]).uniform(-AUG_MAX_MV, AUG_MAX_MV, AUG_COPIES)
 
 
+def noise_copy(c: Curve, i: int) -> tuple[np.ndarray, np.ndarray]:
+    """M8's degraded training copy of curve `c`, the `i`-th in its list (sets the condition)."""
+    from soh.degrade import CASES, degrade, trace_rng  # degrade imports this module
+
+    case = {k.name: k for k in CASES}[NOISE_COPY_CASES[i % len(NOISE_COPY_CASES)]]
+    return degrade(c.t, c.v, case, trace_rng(NOISE_COPY_SEED, c.cell, c.cycle))
+
+
 def feature_table(curves: list[Curve], win: Win, detector=detect_window, augment: bool = False) -> pd.DataFrame:
-    """Features of every trace (`aug` = 0); with `augment`, also of its offset copies (`aug` > 0)."""
+    """Features of every trace (`aug` = 0); with `augment`, also of its offset copies
+    (`aug` = 1..AUG_COPIES) and its noise copy (`aug` = NOISE_COPY)."""
     rows = [{**feature_row(c, c.t, c.v, win, detector), "aug": 0} for c in curves]
     if augment:
-        for c in curves:
+        for i, c in enumerate(curves):
             for k, o in enumerate(aug_offsets_mv(c), start=1):
                 rows.append({**feature_row(c, c.t, c.v + o / 1000, win, detector), "aug": k})
+            rows.append({**feature_row(c, *noise_copy(c, i), win, detector), "aug": NOISE_COPY})
     return pd.DataFrame(rows)
+
+
+def training_rows(df: pd.DataFrame, model: str) -> pd.DataFrame:
+    """The rows `model` trains on: measured traces, plus its own kind of copies.
+
+    augment=True (M6): both offset copies. augment="noise" (M8): the first offset copy and
+    the noise copy, so it sees as many copies as M6.
+    """
+    if "aug" not in df:
+        return df
+    aug = MODELS[model].augment
+    keep = [0] if not aug else list(range(AUG_COPIES + 1)) if aug is True else [0, 1, NOISE_COPY]
+    return df[df.aug.isin(keep)]
 
 
 def originals(df: pd.DataFrame) -> pd.DataFrame:
@@ -140,8 +173,7 @@ def _X(d: pd.DataFrame, model: str) -> np.ndarray:
 
 def fit_model(df: pd.DataFrame, model: str, train_cells):
     """Fit on the answered rows of `train_cells`; None if there are none."""
-    if not MODELS[model].augment:
-        df = originals(df)
+    df = training_rows(df, model)
     train = df[df.cell.isin(train_cells) & (model_reason(df, model) == Reason.OK.value)]
     if train.empty:
         return None
@@ -438,7 +470,11 @@ def main() -> None:
         f"M6 is M5 trained also on {AUG_COPIES} copies of each training trace shifted by a constant "
         f"offset drawn from U(-{AUG_MAX_MV:g}, +{AUG_MAX_MV:g}) mV; it is scored and selects its window "
         "on measured traces only. "
-        "GPR models (M3, M4, M5): coverage95 is the share of answered traces whose measured capacity lies "
+        "M8 is a linear model on dq_a and dq_b plus a GPR on its residual, whose input is the window's "
+        "charge curve as 16 equal-voltage segment charges (unscaled, one shared length scale); it trains "
+        "also on one offset copy and one noise copy of each training trace (a degraded-log condition "
+        "drawn with a seed no degraded test uses). "
+        "GPR models (M3-M6, M8): coverage95 is the share of answered traces whose measured capacity lies "
         "inside the 95 % predictive interval; interval_width is its mean full width in SOH points. "
         "The _cal columns use the std multiplied by the fold's k95 (95th percentile of |error| / std "
         "over the inner held-out predictions at the chosen window, training cells only, / 1.96)."

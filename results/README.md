@@ -17,7 +17,7 @@ the cell's first capacity, on answered traces only. The top-level
 | [`window_log.md`](window_log.md) | Window chosen in each outer fold, its inner score and the GPR calibration factor k95 |
 | [`inner_scores.md`](inner_scores.md) | Every inner leave-one-cell-out score behind those choices |
 | [`degraded.md`](degraded.md), [`degraded.png`](degraded.png) | Every model under every degraded-log case, both window detectors, seed spread |
-| [`summary.png`](summary.png) | Four models under noise, sparse logging and offset: the figure at the top of the main README |
+| [`summary.png`](summary.png) | M3, M4, M6 and M8 under noise, sparse logging and offset: the figure at the top of the main README |
 | [`degraded_paired.md`](degraded_paired.md) | Paired verdicts per degraded case |
 | [`degraded_avg.md`](degraded_avg.md) | Mean of 5 charges against a single charge, per degraded case with random noise or phase |
 | [`accuracy_vs_window.png`](accuracy_vs_window.png) | M1 accuracy against window length |
@@ -41,6 +41,7 @@ Each model is also run with its window restricted to one width (RMSE, nested):
 | M4 ΔQ + IC, GPR | **0.31** | n/a | 0.39 | 0.34 | **0.31** |
 | M5 two segments, GPR | 0.41 | 0.62 | 0.52 | 0.95 | **0.34** |
 | M6 M5 + offset-shifted training copies | 0.42 | 0.51 | 0.43 | 0.52 | **0.36** |
+| M8 halves, linear + curve GPR on the residual, offset and noise copies | **0.23** | 0.37 | 0.40 | 0.31 | **0.23** |
 
 ![M1 accuracy against window length](accuracy_vs_window.png)
 
@@ -71,32 +72,70 @@ Each model is also run with its window restricted to one width (RMSE, nested):
 | IC peak, GPR (M4 vs M3) | 6/8 | **helps** (7/8) | **helps** (8/8) | 6/8 |
 | Two segments (M5 vs M3) | 6/8 | 5/8 | 6/8 | 6/8 |
 | Offset augmentation (M6 vs M5) | 3/8 | **helps** (7/8) | 4/8 | 3/8 |
+| Curve residual and noise copy (M8 vs M6) | **helps** (8/8) | 4/8 | 5/8 | **helps** (7/8) |
+| Curve instead of IC peak (M8 vs M4) | **helps** (7/8) | 3/8 | 5/8 | **helps** (7/8) |
 
 The cell counts give the number of held-out cells on which the model beats its
 control. The rule, fixed before the first run, needs 7 of 8 (one-sided sign test,
 p = 0.035); anything less is reported as "no detectable gain". In the any-width
 column the two models may use different windows, so part of a gain can come from a
 longer window; the fixed-width columns compare at equal width. M6 also helps at
-100 mV (7/8).
+100 mV (7/8). M8's gains are at 400 mV, the width every fold picks; at narrower widths
+they are not detectable.
 
 ### Per cell
 
-| Cell | M1 | M2 | M3 | M4 | M5 | M6 |
-|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 0.54 | 0.15 | 0.30 | 0.18 | 0.29 | 0.23 |
-| 2 | 0.74 | 0.59 | 0.62 | 0.40 | 0.57 | 0.70 |
-| 3 | 0.34 | 0.14 | 0.14 | 0.21 | 0.21 | 0.22 |
-| 4 | 0.84 | 0.61 | 0.65 | 0.33 | 0.32 | 0.56 |
-| 5 | 1.15 | 1.10 | 0.33 | 0.44 | 0.84 | 0.52 |
-| 6 | 0.76 | 0.43 | 0.49 | 0.30 | 0.38 | 0.43 |
-| 7 | 0.54 | 0.52 | 0.61 | 0.39 | 0.22 | 0.36 |
-| 8 | 0.50 | 0.17 | 0.30 | 0.15 | 0.25 | 0.23 |
+| Cell | M1 | M2 | M3 | M4 | M5 | M6 | M8 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.54 | 0.15 | 0.30 | 0.18 | 0.29 | 0.23 | 0.14 |
+| 2 | 0.74 | 0.59 | 0.62 | 0.40 | 0.57 | 0.70 | 0.35 |
+| 3 | 0.34 | 0.14 | 0.14 | 0.21 | 0.21 | 0.22 | 0.11 |
+| 4 | 0.84 | 0.61 | 0.65 | 0.33 | 0.32 | 0.56 | 0.19 |
+| 5 | 1.15 | 1.10 | 0.33 | 0.44 | 0.84 | 0.52 | 0.33 |
+| 6 | 0.76 | 0.43 | 0.49 | 0.30 | 0.38 | 0.43 | 0.36 |
+| 7 | 0.54 | 0.52 | 0.61 | 0.39 | 0.22 | 0.36 | 0.19 |
+| 8 | 0.50 | 0.17 | 0.30 | 0.15 | 0.25 | 0.23 | 0.12 |
 
 RMSE per held-out cell, any-width regime. Cells 2 and 5 have sudden
 capacity drops ([`capacity_fade.png`](capacity_fade.png)): cell 5 loses 20 SOH points
 at its last check (cycle 5000), and cell 2 dips by 5 points at cycle 5000 and by 8 at
 cycle 7400, recovering partly after the first and fully after the second. Every
 model's largest single error falls on one of these two cells.
+
+### Curve model M8
+
+M5 and M6 see the window's charge curve as two numbers. M8 sees it as 16: the time
+below 17 equally spaced levels from V1 to V2, the same running sums as the window
+detector, gives the charge of 16 equal-voltage segments. A linear model on the two
+halves (dq_a, dq_b) carries the level and tilt; a GPR on its residual, with the 16
+unscaled segment charges as input and one shared length scale, adds the finer shape.
+It trains on the measured traces plus two copies per training trace, as many as M6:
+one offset copy as in M6, and one noise copy, the trace degraded as in one of the
+degraded-log cases (noise 2, 5 or 10 mV, 5 mV ADC step, 30 s logging or the combined
+case, cycling over the traces) with a seed no degraded test uses.
+
+- **Clean: 0.23**, against 0.31 for M4 and 0.42 for M6, with the lowest worst cell
+  (0.36) and max error (1.9). It beats M6 on 8 of 8 cells and M4 on 7 of 8, the
+  first model to pass the rule against the IC model. The largest gains are on the
+  two cells with sudden drops (cell 5: 0.33 against M6's 0.52) and on cell 4.
+- **Every fold picks 3.6-4.0 V.** At fixed widths below 400 mV it is no better than
+  M4 or M6 by the rule.
+- **Screened and not added** (fixed-window leave-one-cell-out at 3.6-4.0 V and
+  3.7-3.9 V, not part of `make reproduce`): the curve GPR alone, without the linear
+  part and trained on offset copies only. Nested, it scored 0.25 clean, but noise on
+  the 25 mV segments broke it (1.05 at 10 mV, 1.18 combined). Noise copies alone
+  helped it less than M8's linear part plus noise copies. A one-state exponential
+  filter on the voltage before the detector made noise worse (10 mV: 1.1 to 1.7-2.3):
+  time-below-level already averages independent noise, and a filter turns it into a
+  slow wander that shifts each level crossing as a whole. Generic regressors on the
+  segments did worse than the GPRs (at 3.6-4.0 V: gradient boosting 0.70, random
+  forest 0.59, extra trees 0.48, SVR and kernel ridge above 1, PLS 0.49-1.5); an MLP
+  ensemble matched the curve GPR at 3.6-4.0 V only. 4 segments did worse; 8, 16 and
+  32 were close, with no consistent winner across windows.
+- **Not blind.** The segment count, the linear part and the noise copies were chosen
+  after screening on all 8 cells, as were M5 and M6. The noise copies are drawn from
+  the same family of conditions as the degraded tests, so robustness to a noise type
+  outside that family is untested.
 
 ### Beginning-of-life reference
 
@@ -124,7 +163,7 @@ looked at how much error is left to remove:
 - **The labels repeat to about 0.13 points.** This is the check-to-check scatter of
   the measured capacity around its trend, so no estimator can score below it.
 - **The complete charge gives 0.31.** A linear model on the capacity of the whole
-  charge, from empty to the cutoff, reaches 0.31. M4 gets the same from a 34-minute
+  charge, from empty to the cutoff, reaches 0.31. M4 gets the same from a 33-minute
   window.
 - **With everything, 0.24.** A GPR on the complete-charge capacity plus the two
   segments at 3.6-4.0 V reached 0.24. It needs a full charge from empty, which is
@@ -132,6 +171,8 @@ looked at how much error is left to remove:
 - **Averaging the M4 and M5 estimates** gave 0.27 against M4's 0.31 at 3.6-4.0 V,
   better on 7 of 8 cells. It was not added: the gain is small and half of the
   estimate inherits M4's noise sensitivity.
+- **M8 reaches 0.23 from the 33-minute window,** at the level of the 0.24 that needed
+  the complete charge.
 
 ### GPR intervals
 
@@ -142,7 +183,7 @@ measurements. They reflect noise within the training cells, not the spread betwe
 cells. Each fold therefore calibrates its intervals on its own training cells: the
 predictive std is scaled by k95, the 95th percentile of |error| / std over the inner
 held-out predictions, divided by 1.96. This reuses the inner fits; k95 ranges from
-1.01 to 1.57.
+1.01 to 1.57 (M8: 1.50 to 1.80).
 
 | Model | Raw coverage | Calibrated coverage | Calibrated width |
 |---|---:|---:|---:|
@@ -150,6 +191,10 @@ held-out predictions, divided by 1.96. This reuses the inner fits; k95 ranges fr
 | M4 | 92 % | 95 % | 1.1 points |
 | M5 | 92 % | 97 % | 1.4 points |
 | M6 | 92 % | 93 % | 1.4 points |
+| M8 | 79 % | 96 % | 0.8 points |
+
+M8's raw intervals are the narrowest and cover the least (79 %). Its k95 factors are
+the largest, and calibrated it covers 96 % with the narrowest band.
 
 Calibration fixes the average, not cells whose error drifts with age. Cell 7 stays
 at 68 % (M3) and 77 % (M4), and cell 4 at 72 % (M3).
@@ -198,6 +243,11 @@ On clean traces the two rules are identical.
   to 1.36-1.41 at ±5 mV, M3 to 0.96-0.98, M5 to 0.93-1.03. The IC models barely move
   (M4 0.30-0.35). M6 goes from 0.42 to 0.47-0.48 and helps over M5 (7 and 8 of 8);
   its calibrated intervals still cover 86-92 %, against 53-62 % for M5.
+- **M8** never goes above 0.57 and has the lowest RMSE in every case but two.
+  Offset, ADC step and logging period barely move it (0.23-0.26). Noise does: 0.31
+  at 2 mV, 0.39 at 5 mV, 0.54 at 10 mV and 0.57 combined. There it is level with M6
+  (0.58, 0.59) and with M3, which is marginally lower (0.54, 0.55). Its largest miss
+  in any case is 3.0 points (M6: 4.3).
 - **M5** keeps part of what curve shape adds where the IC peak fails (0.47 at 5 mV
   noise, 0.42 at 60 s), but it is as offset-sensitive as the other ΔQ models and is
   never better than M3 on 7 of 8 cells.
@@ -208,6 +258,9 @@ Paired verdicts across cases ([`degraded_paired.md`](degraded_paired.md)):
   steps, logging up to 30 s and the combined case. It fails at 5 and 10 mV noise.
 - **M4 vs M3:** IC helps the GPR only under offset.
 - **M5 vs M3:** never a detectable gain.
+- **M8 vs M6:** helps in every case except 5 and 10 mV noise and the combined case
+  (5, 5 and 3 of 8 cells), where the two are level.
+- **M8 vs M4:** helps in every case where M4 answers.
 
 ### Averaging over charges
 
@@ -217,17 +270,19 @@ the repeats are simulated: the 20 seeds of a case are independent logs of the sa
 charge, split into blocks of 5, and each block's estimates are averaged
 ([`degraded_avg.md`](degraded_avg.md)). RMSE, single charge → mean of 5:
 
-| Case | M1 | M2 | M3 | M4 | M5 | M6 |
-|---|---:|---:|---:|---:|---:|---:|
-| Noise 2 mV | 0.69 → 0.67 | 0.53 → 0.51 | 0.46 → 0.45 | 0.42 → 0.35 | 0.43 → 0.41 | 0.44 → 0.43 |
-| Noise 5 mV | 0.71 → 0.66 | 0.79 → 0.76 | 0.48 → 0.45 | 1.04 → 0.96 | 0.47 → 0.42 | 0.47 → 0.43 |
-| Noise 10 mV | 0.84 → 0.75 | 1.56 → 1.52 | 0.54 → 0.48 | 2.33 → 2.25 | 0.67 → 0.58 | 0.58 → 0.48 |
-| One sample per 30 s | 0.67 → 0.67 | 0.57 → 0.52 | 0.45 → 0.45 | 0.66 → 0.44 | 0.41 → 0.41 | 0.42 → 0.42 |
-| Combined | 0.84 → 0.71 | 0.63 → 0.54 | 0.55 → 0.48 | 0.81 → 0.54 | 0.59 → 0.44 | 0.59 → 0.46 |
+| Case | M1 | M2 | M3 | M4 | M5 | M6 | M8 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Noise 2 mV | 0.69 → 0.67 | 0.53 → 0.51 | 0.46 → 0.45 | 0.42 → 0.35 | 0.43 → 0.41 | 0.44 → 0.43 | 0.31 → 0.24 |
+| Noise 5 mV | 0.71 → 0.66 | 0.79 → 0.76 | 0.48 → 0.45 | 1.04 → 0.96 | 0.47 → 0.42 | 0.47 → 0.43 | 0.39 → 0.27 |
+| Noise 10 mV | 0.84 → 0.75 | 1.56 → 1.52 | 0.54 → 0.48 | 2.33 → 2.25 | 0.67 → 0.58 | 0.58 → 0.48 | 0.54 → 0.41 |
+| One sample per 30 s | 0.67 → 0.67 | 0.57 → 0.52 | 0.45 → 0.45 | 0.66 → 0.44 | 0.41 → 0.41 | 0.42 → 0.42 | 0.23 → 0.23 |
+| Combined | 0.84 → 0.71 | 0.63 → 0.54 | 0.55 → 0.48 | 0.81 → 0.54 | 0.59 → 0.44 | 0.59 → 0.46 | 0.57 → 0.36 |
 
 - **It brings the ΔQ models back near their clean level** where the damage is
   random: in the combined case M5 ends at 0.44 (clean 0.41) and M6 at 0.46 (clean
-  0.42). Their largest miss also shrinks (M5 7.3 to 5.0, M6 4.3 to 3.2).
+  0.42). Their largest miss also shrinks (M5 7.3 to 5.0, M6 4.3 to 3.2). M8 gains
+  the most under noise, where its error is the most random: combined 0.57 to 0.36,
+  10 mV 0.54 to 0.41.
 - **It does not repair the IC models under noise.** M4 at 10 mV stays at 2.25:
   noise flattens the IC peak the same way in every charge, so the error is a bias.
   Where the IC error is random, from the sampling phase, averaging removes it (M4
@@ -246,9 +301,13 @@ Calibrated coverage, from clean data to degraded:
 | M3 | 91 % | 91 % | 88 % | 64-66 % | 88 % |
 | M4 | 95 % | 49 % | 31 % | 92-98 % | 56 % |
 | M5 | 97 % | 90 % | 75 % | 53-62 % | 78 % |
+| M6 | 93 % | 89 % | 81 % | 86-92 % | 81 % |
+| M8 | 96 % | 98 % | 97 % | 98-99 % | 99 % |
 
 The calibration is set on clean data, so it cannot anticipate a sensor error. Each
-model's intervals fail on exactly the error that moves its point estimate.
+model's intervals fail on exactly the error that moves its point estimate. M8 is the
+exception, because it trains on that error: its noise copies widen the fitted noise
+term, so under noise it over-covers rather than under-covers.
 
 ## Shipped estimators
 

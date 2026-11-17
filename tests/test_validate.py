@@ -396,8 +396,61 @@ def test_augmented_feature_table_applies_each_copys_offset():
     win = Win(3.6, 3.8)
     plain, aug = feature_table(curves, win), feature_table(curves, win, augment=True)
     pd.testing.assert_frame_equal(originals(aug).reset_index(drop=True), plain)
-    assert len(aug) == len(curves) * (1 + AUG_COPIES) and (aug.reason == "OK").all()
+    assert len(aug) == len(curves) * (2 + AUG_COPIES) and (aug.reason == "OK").all()
     for c in curves:
-        rows = aug[aug.cell == c.cell].sort_values("aug")
+        rows = aug[(aug.cell == c.cell) & (aug.aug <= AUG_COPIES)].sort_values("aug")
         dq0, dq_copies = rows.dq.iloc[0], rows.dq.iloc[1:].to_numpy()
         np.testing.assert_array_equal(np.sign(dq0 - dq_copies), np.sign(aug_offsets_mv(c)))
+
+
+# --- noise copy and curve model (M8) ---------------------------------------------------
+
+from soh.models import CURVE_COLS, HalvesPlusCurve  # noqa: E402
+from soh.validate import NOISE_COPY, noise_copy, training_rows  # noqa: E402
+
+
+def test_noise_copy_is_degraded_and_fixed_per_trace():
+    c = toy_curve(1, 100)
+    for i in range(6):
+        (t, v), (t2, v2) = noise_copy(c, i), noise_copy(c, i)
+        np.testing.assert_array_equal(v, v2)
+        assert len(t) < len(c.t) or not np.array_equal(v, c.v[: len(v)])
+    assert not np.array_equal(noise_copy(c, 0)[1], noise_copy(toy_curve(1, 200), 0)[1])
+
+
+def test_noise_copy_seed_is_never_a_degraded_test_seed():
+    from soh.degrade import SEEDS
+    from soh.validate import NOISE_COPY_SEED
+
+    assert NOISE_COPY_SEED not in SEEDS
+
+
+def test_each_augment_mode_trains_on_its_own_copies(monkeypatch):
+    from soh import validate
+
+    df = pd.concat([synthetic_table().assign(aug=k) for k in range(NOISE_COPY + 1)], ignore_index=True)
+    monkeypatch.setitem(validate.MODELS, "NOISE", Spec(("dq",), object, augment="noise"))
+    monkeypatch.setitem(validate.MODELS, "AUG", Spec(("dq",), object, augment=True))
+    monkeypatch.setitem(validate.MODELS, "PLAIN", Spec(("dq",), object))
+    assert set(training_rows(df, "PLAIN").aug) == {0}
+    assert set(training_rows(df, "AUG").aug) == set(range(AUG_COPIES + 1))
+    assert set(training_rows(df, "NOISE").aug) == {0, 1, NOISE_COPY}
+
+
+def test_feature_table_carries_the_window_curve():
+    win = Win(3.6, 3.8)
+    df = feature_table([toy_curve(1, 0)], win)
+    seg = df[list(CURVE_COLS)].to_numpy()[0]
+    half = len(seg) // 2
+    assert seg.sum() == pytest.approx(df.dq.iloc[0])
+    assert (seg[:half].sum(), seg[half:].sum()) == (pytest.approx(df.dq_a.iloc[0]), pytest.approx(df.dq_b.iloc[0]))
+
+
+def test_halves_plus_curve_is_exact_on_a_linear_relation_of_the_halves():
+    rng = np.random.default_rng(0)
+    X = rng.uniform(5, 15, (60, 16))
+    y = 100 + 2 * X[:, :8].sum(1) + 3 * X[:, 8:].sum(1)
+    m = HalvesPlusCurve().fit(X, y)
+    mu, sd = m.predict(X[:5], return_std=True)
+    np.testing.assert_allclose(mu, y[:5], atol=1e-6)
+    assert (sd >= 0).all() and np.allclose(m.predict(X[:5]), mu)

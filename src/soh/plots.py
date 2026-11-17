@@ -118,7 +118,7 @@ def predictions(preds: dict[str, pd.DataFrame], regime: str = "any") -> None:
     save_fig(fig, "predictions_gpr.png")
 
 
-def degraded(summary: pd.DataFrame, models=("M1", "M2", "M3", "M4", "M5", "M6"), baseline_models=("M1", "M3")) -> None:
+def degraded(summary: pd.DataFrame, models=("M1", "M2", "M3", "M4", "M5", "M6", "M8"), baseline_models=("M1", "M3")) -> None:
     """Held-out RMSE at each level of each degradation sweep, one line per model.
 
     Solid: the project's window detector. Dashed: the first-crossing baseline, for
@@ -128,7 +128,7 @@ def degraded(summary: pd.DataFrame, models=("M1", "M2", "M3", "M4", "M5", "M6"),
     """
     base = summary[summary.detector == "first-crossing"]
     summary = summary[summary.detector == "time-below"]
-    colors = {"M1": "C0", "M2": "C1", "M3": "C2", "M4": "C3", "M5": "C4", "M6": "C5"}
+    colors = {"M1": "C0", "M2": "C1", "M3": "C2", "M4": "C3", "M5": "C4", "M6": "C5", "M8": "C6"}
     panels = [
         ("Voltage noise sigma [mV]", ["clean", "noise 1 mV", "noise 2 mV", "noise 5 mV", "noise 10 mV"], ["0", "1", "2", "5", "10"]),
         ("Sample period [s]", ["period 1 s", "period 10 s", "period 30 s", "period 60 s"], ["1", "10", "30", "60"]),
@@ -167,17 +167,17 @@ def degraded(summary: pd.DataFrame, models=("M1", "M2", "M3", "M4", "M5", "M6"),
 
 
 def summary(table: pd.DataFrame) -> None:
-    """README figure: four models under the three log faults that separate them.
+    """README figure: four of the models under the three log faults that separate them.
 
     A reduced view of `degraded`: one shared RMSE axis, descriptive names, and text
     sized for the README column. Colour and marker both identify the model.
     """
     table = table[table.detector == "time-below"]
     models = {
-        "M1": ("ΔQ, linear (M1)", "#2a78d6", "o"),
         "M3": ("ΔQ, GPR (M3)", "#1baf7a", "s"),
         "M4": ("ΔQ + IC peak, GPR (M4)", "#e34948", "^"),
-        "M6": ("ΔQ of two segments, GPR, offset-trained (M6)", "#6250d6", "D"),
+        "M6": ("ΔQ of 2 segments, GPR, offset copies (M6)", "#eda100", "D"),
+        "M8": ("ΔQ of 16 segments, linear + GPR, offset and noise copies (M8)", "#2a78d6", "o"),
     }
     panels = [
         ("Voltage noise", "Noise sigma [mV]", ["clean", "noise 1 mV", "noise 2 mV", "noise 5 mV", "noise 10 mV"], ["0", "1", "2", "5", "10"]),

@@ -1,6 +1,6 @@
 # Selected window per outer fold
 
-Nested leave-one-cell-out: each model picks its window inside each outer fold by inner leave-one-cell-out on the 7 training cells. Regime `any` searches the full grid; `wNNN` restricts it to one width (mV). Errors in SOH percentage points on answered traces; n_<REASON> counts traces with no estimate. IC settings were frozen before the first run with M2. For windows starting at 3.8 V, early-life traces (first 600-800 cycles) give IC_EDGE partly because of a smoothing edge artifact: their dQ/dV peak (~3.82 V) lies within the Savitzky-Golay half-width of V1, and edge extrapolation puts the maximum in the first bin. M5 is GPR on the window's two halves, dq_a (V1 to the midpoint) and dq_b (midpoint to V2). M6 is M5 trained also on 2 copies of each training trace shifted by a constant offset drawn from U(-8, +8) mV; it is scored and selects its window on measured traces only. GPR models (M3, M4, M5): coverage95 is the share of answered traces whose measured capacity lies inside the 95 % predictive interval; interval_width is its mean full width in SOH points. The _cal columns use the std multiplied by the fold's k95 (95th percentile of |error| / std over the inner held-out predictions at the chosen window, training cells only, / 1.96).
+Nested leave-one-cell-out: each model picks its window inside each outer fold by inner leave-one-cell-out on the 7 training cells. Regime `any` searches the full grid; `wNNN` restricts it to one width (mV). Errors in SOH percentage points on answered traces; n_<REASON> counts traces with no estimate. IC settings were frozen before the first run with M2. For windows starting at 3.8 V, early-life traces (first 600-800 cycles) give IC_EDGE partly because of a smoothing edge artifact: their dQ/dV peak (~3.82 V) lies within the Savitzky-Golay half-width of V1, and edge extrapolation puts the maximum in the first bin. M5 is GPR on the window's two halves, dq_a (V1 to the midpoint) and dq_b (midpoint to V2). M6 is M5 trained also on 2 copies of each training trace shifted by a constant offset drawn from U(-8, +8) mV; it is scored and selects its window on measured traces only. M8 is a linear model on dq_a and dq_b plus a GPR on its residual, whose input is the window's charge curve as 16 equal-voltage segment charges (unscaled, one shared length scale); it trains also on one offset copy and one noise copy of each training trace (a degraded-log condition drawn with a seed no degraded test uses). GPR models (M3-M6, M8): coverage95 is the share of answered traces whose measured capacity lies inside the 95 % predictive interval; interval_width is its mean full width in SOH points. The _cal columns use the std multiplied by the fold's k95 (95th percentile of |error| / std over the inner held-out predictions at the chosen window, training cells only, / 1.96).
 
 | model   | regime   |   fold |    v1 |    v2 |   width_mv |   inner_score |   inner_answer_rate |     k95 |   n_eligible |   n_candidates |
 |:--------|:---------|-------:|------:|------:|-----------:|--------------:|--------------------:|--------:|-------------:|---------------:|
@@ -268,3 +268,43 @@ Nested leave-one-cell-out: each model picks its window inside each outer fold by
 | M6      | w400     |      6 | 3.600 | 4.000 |        400 |         0.359 |               1.000 |   1.231 |            3 |              3 |
 | M6      | w400     |      7 | 3.600 | 4.000 |        400 |         0.370 |               1.000 |   1.190 |            3 |              3 |
 | M6      | w400     |      8 | 3.600 | 4.000 |        400 |         0.391 |               1.000 |   1.102 |            3 |              3 |
+| M8      | any      |      1 | 3.600 | 4.000 |        400 |         0.251 |               1.000 |   1.701 |           17 |             17 |
+| M8      | any      |      2 | 3.600 | 4.000 |        400 |         0.233 |               1.000 |   1.803 |           17 |             17 |
+| M8      | any      |      3 | 3.600 | 4.000 |        400 |         0.245 |               1.000 |   1.606 |           17 |             17 |
+| M8      | any      |      4 | 3.600 | 4.000 |        400 |         0.237 |               1.000 |   1.649 |           17 |             17 |
+| M8      | any      |      5 | 3.600 | 4.000 |        400 |         0.232 |               1.000 |   1.603 |           17 |             17 |
+| M8      | any      |      6 | 3.600 | 4.000 |        400 |         0.177 |               1.000 |   1.495 |           17 |             17 |
+| M8      | any      |      7 | 3.600 | 4.000 |        400 |         0.239 |               1.000 |   1.625 |           17 |             17 |
+| M8      | any      |      8 | 3.600 | 4.000 |        400 |         0.234 |               1.000 |   1.533 |           17 |             17 |
+| M8      | w100     |      1 | 3.800 | 3.900 |        100 |         0.340 |               1.000 |   1.131 |            5 |              5 |
+| M8      | w100     |      2 | 3.800 | 3.900 |        100 |         0.458 |               1.000 |   1.079 |            5 |              5 |
+| M8      | w100     |      3 | 3.800 | 3.900 |        100 |         0.364 |               1.000 |   1.180 |            5 |              5 |
+| M8      | w100     |      4 | 3.800 | 3.900 |        100 |         0.364 |               1.000 |   1.258 |            5 |              5 |
+| M8      | w100     |      5 | 3.800 | 3.900 |        100 |         0.347 |               1.000 |   1.352 |            5 |              5 |
+| M8      | w100     |      6 | 3.800 | 3.900 |        100 |         0.356 |               1.000 |   1.147 |            5 |              5 |
+| M8      | w100     |      7 | 3.800 | 3.900 |        100 |         0.366 |               1.000 |   1.200 |            5 |              5 |
+| M8      | w100     |      8 | 3.800 | 3.900 |        100 |         0.351 |               1.000 |   1.092 |            5 |              5 |
+| M8      | w200     |      1 | 3.800 | 4.000 |        200 |         0.350 |               1.000 |   1.251 |            5 |              5 |
+| M8      | w200     |      2 | 3.700 | 3.900 |        200 |         0.386 |               1.000 |   1.351 |            5 |              5 |
+| M8      | w200     |      3 | 3.700 | 3.900 |        200 |         0.315 |               1.000 |   1.220 |            5 |              5 |
+| M8      | w200     |      4 | 3.700 | 3.900 |        200 |         0.333 |               1.000 |   1.395 |            5 |              5 |
+| M8      | w200     |      5 | 3.700 | 3.900 |        200 |         0.339 |               1.000 |   1.595 |            5 |              5 |
+| M8      | w200     |      6 | 3.800 | 4.000 |        200 |         0.311 |               1.000 |   1.259 |            5 |              5 |
+| M8      | w200     |      7 | 3.700 | 3.900 |        200 |         0.288 |               1.000 |   1.191 |            5 |              5 |
+| M8      | w200     |      8 | 3.800 | 4.000 |        200 |         0.343 |               1.000 |   1.113 |            5 |              5 |
+| M8      | w300     |      1 | 3.600 | 3.900 |        300 |         0.309 |               1.000 |   1.426 |            4 |              4 |
+| M8      | w300     |      2 | 3.700 | 4.000 |        300 |         0.270 |               1.000 |   1.451 |            4 |              4 |
+| M8      | w300     |      3 | 3.600 | 3.900 |        300 |         0.290 |               1.000 |   1.301 |            4 |              4 |
+| M8      | w300     |      4 | 3.600 | 3.900 |        300 |         0.300 |               1.000 |   1.420 |            4 |              4 |
+| M8      | w300     |      5 | 3.700 | 4.000 |        300 |         0.297 |               1.000 |   1.551 |            4 |              4 |
+| M8      | w300     |      6 | 3.600 | 3.900 |        300 |         0.294 |               1.000 |   1.419 |            4 |              4 |
+| M8      | w300     |      7 | 3.600 | 3.900 |        300 |         0.284 |               1.000 |   1.291 |            4 |              4 |
+| M8      | w300     |      8 | 3.600 | 3.900 |        300 |         0.276 |               1.000 |   1.274 |            4 |              4 |
+| M8      | w400     |      1 | 3.600 | 4.000 |        400 |         0.251 |               1.000 |   1.701 |            3 |              3 |
+| M8      | w400     |      2 | 3.600 | 4.000 |        400 |         0.233 |               1.000 |   1.803 |            3 |              3 |
+| M8      | w400     |      3 | 3.600 | 4.000 |        400 |         0.245 |               1.000 |   1.606 |            3 |              3 |
+| M8      | w400     |      4 | 3.600 | 4.000 |        400 |         0.237 |               1.000 |   1.649 |            3 |              3 |
+| M8      | w400     |      5 | 3.600 | 4.000 |        400 |         0.232 |               1.000 |   1.603 |            3 |              3 |
+| M8      | w400     |      6 | 3.600 | 4.000 |        400 |         0.177 |               1.000 |   1.495 |            3 |              3 |
+| M8      | w400     |      7 | 3.600 | 4.000 |        400 |         0.239 |               1.000 |   1.625 |            3 |              3 |
+| M8      | w400     |      8 | 3.600 | 4.000 |        400 |         0.234 |               1.000 |   1.533 |            3 |              3 |

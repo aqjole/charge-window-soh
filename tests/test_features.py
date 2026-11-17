@@ -5,6 +5,7 @@ from soh.features import (
     ARM_BAND_V,
     END_BAND_V,
     MAX_GAP_S,
+    N_SEG,
     Reason,
     crossing_time,
     detect_first_crossing,
@@ -151,6 +152,26 @@ def test_failed_window_has_no_segments():
     w = detect_window(t, v, V1, V2)
     assert w.reason is Reason.NO_V2
     assert np.isnan(w.dq_a) and np.isnan(w.dq_b)
+    assert np.isnan(w.segments).all() and len(w.segments) == N_SEG
+
+
+def test_curve_segments_on_linear_trace():
+    # 1 mV/s: each 25 mV segment of 3.6-4.0 V takes 25 s, for both detectors.
+    t, v = linear_trace(dt=7.0)
+    for detector in (detect_window, detect_first_crossing):
+        w = detector(t, v, V1, V2, current_ma=I_MA)
+        np.testing.assert_allclose(w.segments, I_MA * 25 / 3600)
+        assert w.segments.sum() == pytest.approx(w.dq)
+        assert w.segments[: N_SEG // 2].sum() == pytest.approx(w.dq_a)
+
+
+def test_curve_segments_follow_the_slope():
+    # Slow below 3.8 V, fast above: the lower segments hold more charge.
+    t = np.arange(0.0, 2000.0, 1.0)
+    v = np.where(t <= 900, 3.5 + 0.0005 * t, 3.95 + 0.002 * (t - 900))
+    seg = detect_window(t, v, V1, V2, current_ma=I_MA).segments
+    np.testing.assert_allclose(seg[:6], I_MA * 50 / 3600)  # 0.5 mV/s up to 3.95 V
+    np.testing.assert_allclose(seg[-2:], I_MA * 12.5 / 3600)  # 2 mV/s above
 
 
 def test_noise_does_not_bias_the_window():
