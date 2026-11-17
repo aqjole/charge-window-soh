@@ -4,7 +4,7 @@
 
 A battery management system (BMS) rarely sees a full charge, and its voltage log is
 noisy and sparse. This project estimates state of health (SOH: remaining capacity as
-a percentage of the capacity when new) from a 25-35 minute slice of a
+a percentage of the capacity when new) from a 25-33 minute slice of a
 constant-current charge, using voltage and time only. It asks two questions:
 
 1. How much does incremental-capacity (IC) analysis add over simply counting the
@@ -54,7 +54,8 @@ is never used for fitting, for choosing the window or for calibration.
   an addition counts as a gain only if it is better on at least 7 of 8 held-out
   cells.
 - **BMS log simulation.** Decimation, sensor offset, Gaussian noise and ADC
-  rounding, applied in logger order, with 20 random seeds per case.
+  rounding, applied in logger order, with 20 random seeds where anything is
+  random.
 - **C99 estimator.** Model headers are generated from the Python fit, and the C
   output is checked against Python on every trace.
 - **Reproducibility.** One command regenerates every table and plot, with
@@ -91,7 +92,7 @@ Verdicts under the 7-of-8-cells rule:
 - **Two segments (M5 vs M3):** better on 6 of 8, so no detectable gain.
 - **Offset augmentation (M6 vs M5):** better on 3 of 8, so no detectable gain on
   clean logs. Under a ±5 mV offset it helps (7 and 8 of 8).
-- **Curve and noise copy (M8 vs M6):** helps, better on 8 of 8 cells.
+- **Curve residual and noise copy (M8 vs M6):** helps, better on 8 of 8 cells.
 - **Curve instead of IC peak (M8 vs M4):** helps, better on 7 of 8 cells. Both M8
   gains need the full 400 mV window; at narrower widths they are not detectable.
 
@@ -145,9 +146,10 @@ What the table shows:
 - **Averaging a few charges removes most of the random part.** A BMS sees a charge
   every cycle, so it can average its last estimates. With the mean of 5 simulated
   repeats, the combined case drops from 0.59 to 0.44 (M5) and 0.46 (M6), close to
-  their clean 0.41 and 0.42, and from 0.57 to 0.36 for M8. It does not repair the IC models under noise (M4 at
-  10 mV: 2.33 to 2.25), where the error is a bias, and it cannot remove a constant
-  offset ([details](results/README.md#averaging-over-charges)).
+  their clean 0.41 and 0.42, and from 0.57 to 0.36 for M8. It does not repair the
+  IC models under noise (M4 at 10 mV: 2.33 to 2.25), where the error is a bias, and
+  it cannot remove a constant offset
+  ([details](results/README.md#averaging-over-charges)).
 
 Per-cell tables, the window-width trade-off, interval calibration and every
 degraded case are in [`results/`](results/README.md).
@@ -185,12 +187,12 @@ giving 17 windows.
 **Models.** M0-M6 and M8 as in the clean-logs table. M6 also trains on two copies of
 each training trace with a constant offset drawn from ±8 mV; copies are never
 scored. M8 trains on one such offset copy and one noise copy: the trace degraded as
-in one of the BMS-like cases below, with a seed those tests never use. Its GPR takes
-the 16 segment charges unscaled, with one length scale, and models what a linear fit
-on the two halves leaves. M7, the same GPR without the linear part, was screened and
-not added ([details](results/README.md#curve-model-m8)). The other GPRs use a Matérn
-5/2 kernel with one length scale per input plus a white-noise term, on standardized
-inputs. All fits use fixed seeds.
+in one of the BMS-like cases below, with a seed those tests never use. All GPRs use
+a Matérn 5/2 kernel plus a white-noise term. M3-M6 have one length scale per input,
+on standardized inputs. M8's GPR takes the 16 segment charges unscaled, with one
+shared length scale, and models what a linear fit on the two halves leaves. M7, the
+same GPR without the linear part and without the noise copy, was screened and not
+added ([details](results/README.md#curve-model-m8)). All fits use fixed seeds.
 
 **Validation.** Nested leave-one-cell-out:
 
@@ -260,20 +262,17 @@ code against Python on synthetic traces that exercise every reason code.
 - **Exploratory use of the 8 cells.** The detector change, M5, interval
   calibration, M6, charge averaging and M8 were added after earlier results on the
   same 8 cells. The nested validation keeps each number honest, but the choice of
-  which models to report was not blind. A new dataset would be needed for a generalization
-  claim.
-- **M8 has seen the test conditions.** Its noise copies come from the same family
-  of conditions as the BMS-like tests, so a kind of noise outside that family is
-  untested.
+  which models to report was not blind. A new dataset would be needed for a
+  generalization claim.
+- **M8 has seen the test conditions.** Its noise copies come from six of the
+  BMS-like cases, so noise of another kind is untested.
 - **Repeated charges are simulated.** The dataset has one charge per 100 cycles, so
   the averaged charges are independent noisy logs of the same charge. Real
   consecutive charges also differ in temperature and starting state.
-- **Two cells have sudden capacity drops** (cells 2 and 5, see
-  [`results/capacity_fade.png`](results/capacity_fade.png)). Cell 5 loses 20 SOH
-  points at its last check (cycle 5000). Cell 2 dips by 5 points at cycle 5000 and by
-  8 at cycle 7400, and recovers at the following checks, partly after the first dip
-  and fully after the second. Every model's largest error falls on one of these two
-  cells.
+- **Two cells have sudden capacity drops** (cells 2 and 5,
+  [`results/capacity_fade.png`](results/capacity_fade.png), details in
+  [`results/`](results/README.md#per-cell)). Every model's largest error falls on
+  one of these two cells.
 - **Sensor errors not covered.** Current is assumed constant and known; a current-gain
   error passes one-to-one into ΔQ and is not tested. Voltage offset is tested only as
   a constant; a drifting offset is not.
@@ -314,8 +313,8 @@ and 0.49 % with 1,450 s starting at 3.7 V.
 These are not directly comparable with the numbers here. Their label is capacity
 from integrating the charge curve. The quoted figures are single entries of a grid
 of results over start voltage and duration, not windows chosen inside each fold.
-And the logs are clean. For scale, M3 with a
-window of about 26 min (1,570 s) reaches 0.45 SOH points.
+And the logs are clean. For scale, M3 with a window of about 26 min (1,570 s)
+reaches 0.45 SOH points.
 
 ## Reproduce
 
@@ -326,8 +325,8 @@ make data        # downloads the dataset (about 254 MB) to data/raw/, checked by
 make reproduce   # tests, audit, validation, degraded logs, frozen models, C agreement
 ```
 
-`make reproduce` takes about 80 minutes on a busy 8-core laptop, mostly M6's GPR
-fits. Results are deterministic: afterwards `git diff results/*.csv` is empty.
+`make reproduce` takes well over an hour on an 8-core laptop, mostly the GPR fits
+of M6 and M8. Results are deterministic: afterwards `git diff results/*.csv` is empty.
 `make test` alone needs no dataset; CI runs it on every push, together with a
 `-Werror` build of the C code with gcc and clang.
 

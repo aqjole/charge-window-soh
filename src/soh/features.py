@@ -24,7 +24,7 @@ Window detector, time-below-level (same rules as the C estimator):
   the first and second half sum to dq_a and dq_b. Still two running sums per level
   and no sample buffer.
 
-`detect_first_crossing` is the rule used up to commit 6. It is kept only as the
+`detect_first_crossing` is the project's earlier rule. It is kept only as the
 baseline in the degraded-log comparison.
 
 IC features (used by M2/M4 only), from the samples with t1 <= t < t2:

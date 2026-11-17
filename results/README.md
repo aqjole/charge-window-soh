@@ -10,7 +10,7 @@ the cell's first capacity, on answered traces only. The top-level
 
 | File | What it holds |
 |---|---|
-| [`audit.md`](audit.md), [`capacity_fade.png`](capacity_fade.png) | Data checks (file hash, time unit, constant current, cutoff, curve counts) and capacity against cycle per cell |
+| [`audit.md`](audit.md), [`capacity_fade.png`](capacity_fade.png) | Data checks (file hash, time unit, constant current, curve counts, sample period, first label of each cell; cutoff recorded) and capacity against cycle per cell |
 | [`clean_nested.md`](clean_nested.md) | Main table: every model, any-width and fixed-width regimes, pooled and macro RMSE, max error, answer rate, window duration, raw and calibrated GPR coverage |
 | [`clean_nested_per_cell.md`](clean_nested_per_cell.md) | The same, per held-out cell |
 | [`paired.md`](paired.md), [`paired_per_cell.md`](paired_per_cell.md) | Each model against its control on commonly answered traces, with the 7-of-8-cells verdict |
@@ -122,7 +122,7 @@ case, cycling over the traces) with a seed no degraded test uses.
   M4 or M6 by the rule.
 - **Screened and not added** (fixed-window leave-one-cell-out at 3.6-4.0 V and
   3.7-3.9 V, not part of `make reproduce`): the curve GPR alone, without the linear
-  part and trained on offset copies only. Nested, it scored 0.25 clean, but noise on
+  part and trained on offset copies only (M7). Nested, it scored 0.25 clean, but noise on
   the 25 mV segments broke it (1.05 at 10 mV, 1.18 combined). Noise copies alone
   helped it less than M8's linear part plus noise copies. A one-state exponential
   filter on the voltage before the detector made noise worse (10 mV: 1.1 to 1.7-2.3):
@@ -178,8 +178,8 @@ looked at how much error is left to remove:
 
 ![GPR held-out error with calibrated bands](predictions_gpr.png)
 
-The raw GPR 95 % intervals cover 87 % (M3), 92 % (M4), 92 % (M5) and 92 % (M6) of held-out
-measurements. They reflect noise within the training cells, not the spread between
+The raw GPR 95 % intervals cover 87 % (M3), 92 % (M4, M5 and M6) and 79 % (M8) of
+held-out measurements. They reflect noise within the training cells, not the spread between
 cells. Each fold therefore calibrates its intervals on its own training cells: the
 predictive std is scaled by k95, the 95th percentile of |error| / std over the inner
 held-out predictions, divided by 1.96. This reuses the inner fits; k95 ranges from
@@ -193,17 +193,17 @@ held-out predictions, divided by 1.96. This reuses the inner fits; k95 ranges fr
 | M6 | 92 % | 93 % | 1.4 points |
 | M8 | 79 % | 96 % | 0.8 points |
 
-M8's raw intervals are the narrowest and cover the least (79 %). Its k95 factors are
-the largest, and calibrated it covers 96 % with the narrowest band.
+M8's raw intervals are the narrowest and cover the least. Its k95 factors are the
+largest, and calibrated it covers 96 % with the narrowest band.
 
 Calibration fixes the average, not cells whose error drifts with age. Cell 7 stays
 at 68 % (M3) and 77 % (M4), and cell 4 at 72 % (M3).
 
 ## BMS-like logs
 
-Each outer fold's model, at the window it selected and fit on clean training cells,
-is frozen and applied to degraded copies of its held-out cell. Per trace, in logger
-order:
+Each outer fold's model, at the window it selected and fit on its training cells
+(M6 and M8 also on their copies), is frozen and applied to degraded copies of its
+held-out cell. Per trace, in logger order:
 
 1. decimate to the logging period (sample-and-hold, random phase);
 2. add a constant offset and Gaussian noise;

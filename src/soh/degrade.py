@@ -17,7 +17,7 @@ not depend on processing order and every case sees the same random numbers for t
 same seed. Cases with nothing random run once (seed 0).
 
 Every case runs twice: with the project's window detector (time-below-level) and,
-as a baseline, with the first-crossing rule used up to commit 6. The baseline's
+as a baseline, with the project's earlier first-crossing rule. The baseline's
 fold models are refit on clean first-crossing features at the same windows, so the
 two rows differ only in the detector.
 
@@ -129,7 +129,9 @@ def degraded_features(
 def fold_models(
     curves: list[Curve], log: pd.DataFrame, detector=detect_window, calibrate: bool = True
 ) -> dict[tuple[str, int], tuple[Win, object, float]]:
-    """(model, fold) -> (selected window, model fit on the clean training cells, k95).
+    """(model, fold) -> (selected window, model fit on the training cells, k95).
+
+    M6 and M8 also train on their copies of the training cells (`training_rows`).
 
     k95 is NaN for point models and when `calibrate` is False.
     """
@@ -253,12 +255,12 @@ def main() -> None:
 
     note = (
         "Frozen fold models (each outer fold's model at the window it selected in the any-width "
-        "regime, fit on clean training cells) applied to degraded copies of their held-out cell. "
+        "regime, fit on its training cells; M6 and M8 also on their copies) applied to degraded copies of their held-out cell. "
         "Degradation order: sample-and-hold decimation with random phase, offset + Gaussian noise, "
         "rounding to the LSB. Metrics pooled over seeds (20 where noise or phase is random, else 1); "
         "rmse_seed_min/max give the spread of per-seed RMSE; n_<REASON> are mean counts per run. "
         "Errors in SOH percentage points on answered traces. detector `time-below` is the project's "
-        "window detector; `first-crossing` is the rule used up to commit 6, kept as a baseline "
+        "window detector; `first-crossing` is the project's earlier rule, kept as a baseline "
         "(fold models refit on its clean features at the same windows). The _cal columns use GPR "
         "intervals calibrated with each fold's k95 from the clean inner fits (main detector only). "
         "Current-sensor error is not "
